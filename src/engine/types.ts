@@ -1,0 +1,61 @@
+/**
+ * Game-engine abstraction. The tournament layer only knows this interface;
+ * the Forge bridge and the mock engine both implement it. A new engine (XMage,
+ * a custom sim) only has to turn its own decision points into DecisionRequests
+ * and call `seat.decide`.
+ */
+import type { Seat } from "../agents/agent.ts";
+import type { Deck } from "../deckbuild/deckbuild.ts";
+
+export interface MatchSpec {
+  matchId: string;
+  pod: number;
+  round: number;
+  seats: [Seat, Seat];
+  decks: [Deck, Deck];
+  deckFiles: [string, string];   // .dck paths (used by Forge)
+  gamesPerMatch: number;         // best-of-N
+  seed: number;
+  maxGameTurns: number;
+  runDir: string;
+}
+
+export interface GameResult {
+  game: number;                  // 1-based
+  winner: 0 | 1 | null;          // index into spec.seats; null = draw
+  onThePlay: 0 | 1;
+  turns: number;
+  reason: string;                // "life", "decked", "poison", "concede", "turn-cap", "timeout", "error"...
+  decisions: [number, number];   // decisions asked of each seat
+  durationMs: number;
+}
+
+export interface MatchResult {
+  matchId: string;
+  pod: number;
+  round: number;
+  seats: [string, string];
+  games: GameResult[];
+  winner: 0 | 1 | null;
+  error?: string;
+}
+
+export interface GameEngine {
+  readonly name: string;
+  playMatch(spec: MatchSpec): Promise<MatchResult>;
+  close?(): Promise<void>;
+}
+
+/** Best-of-N bookkeeping shared by engines. */
+export function matchOver(games: GameResult[], bestOf: number): boolean {
+  const need = Math.floor(bestOf / 2) + 1;
+  const w0 = games.filter((g) => g.winner === 0).length;
+  const w1 = games.filter((g) => g.winner === 1).length;
+  return w0 >= need || w1 >= need || games.length >= bestOf + 2; // +2 cap guards endless draws
+}
+
+export function matchWinner(games: GameResult[]): 0 | 1 | null {
+  const w0 = games.filter((g) => g.winner === 0).length;
+  const w1 = games.filter((g) => g.winner === 1).length;
+  return w0 > w1 ? 0 : w1 > w0 ? 1 : null;
+}

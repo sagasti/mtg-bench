@@ -1,0 +1,27 @@
+{
+  "name": "mtg-bench",
+  "version": "1.0.0",
+  "description": "Cube draft + gameplay benchmark for AI agents, backed by Forge",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "bench": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  },
+  "type": "module",
+  "bin": {
+    "mtg-bench": "src/cli.ts"
+  }
+}

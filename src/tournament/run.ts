@@ -1,0 +1,114 @@
+/** Runs an event: cube study → (per pod) draft → deckbuild → matches → ratings + analytics. */
+import fs from "node:fs";
+import path from "node:path";
+import { makeSeat } from "../agents/factory.ts";
+import type { Seat } from "../agents/agent.ts";
+import { Recorder } from "../analytics/recorder.ts";
+import { writeReport } from "../analytics/report.ts";
+import { loadDb } from "../cards/db.ts";
+import { loadCube, loadRankings } from "../cards/cube.ts";
+import type { BenchConfig } from "../config.ts";
+import { buildDeck, type Deck, saveDeck } from "../deckbuild/deckbuild.ts";
+import { runDraft } from "../draft/draft.ts";
+import type { GameEngine, MatchResult } from "../engine/types.ts";
+import { KnowledgeBase } from "../knowledge/tools.ts";
+import { rate } from "../rating/bt.ts";
+import { outcomesFromMatches } from "../rating/outcomes.ts";
+import { info, Jsonl } from "../util/log.ts";
+import { Rng } from "../util/rng.ts";
+import { roundRobin, swissRound } from "./schedule.ts";
+
+export async function pool<T, R>(items: T[], limit: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => { while (next < items.length) { const i = next++; out[i] = await fn(items[i], i); } };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
+  return out;
+}
+
+export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { runId?: string } = {}) {
+  const ev = cfg.event;
+  const runId = opts.runId ?? `${new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19)}_${ev.name.replace(/[^A-Za-z0-9_-]+/g, "_")}`;
+  const runDir = path.join(cfg.outputDir, runId);
+  fs.mkdirSync(runDir, { recursive: true });
+  // Snapshot config (keys live in env vars, so this is safe to keep) + prompts used.
+  fs.writeFileSync(path.join(runDir, "config.json"), JSON.stringify(cfg, null, 2));
+  fs.cpSync(path.resolve("prompts", ev.promptVersion), path.join(runDir, "prompts"), { recursive: true });
+
+  const db = loadDb();
+  const cube = loadCube(db, ev.cube, cfg.forgeRes);
+  if (cube.missing.length) info(`cube: ${cube.missing.length} card(s) not in DB and dropped: ${cube.missing.slice(0, 5).join(", ")}${cube.missing.length > 5 ? "…" : ""}`);
+  const rankings = loadRankings(cfg.forgeRes);
+  const kb = new KnowledgeBase(db, cube.cards);
+  const recorder = new Recorder(runDir, runId);
+  const rng = new Rng(ev.seed);
+  const seats = cfg.seats.map((sc) => makeSeat(sc, { cfg, db, kb, rankings, recorder, rng, cubeName: cube.name }));
+  const draftLog = new Jsonl(path.join(runDir, "draft.jsonl"));
+  const matchLog = new Jsonl(path.join(runDir, "matches.jsonl"));
+  const allMatches: MatchResult[] = [];
+  info(`run ${runId}: ${seats.length} seats, ${ev.pods} pod(s), ${ev.format}, bo${ev.gamesPerMatch}, engine=${engine.name}, knowledge=${ev.knowledge}`);
+  recorder.event("run_start", { cube: cube.name, cubeSize: cube.cards.length, seats: cfg.seats.map((s) => ({ id: s.id, provider: s.provider, model: s.model })) });
+
+  if (ev.cubeStudy) {
+    info("cube study…");
+    fs.mkdirSync(path.join(runDir, "prep"), { recursive: true });
+    await Promise.all(seats.map(async (s) => {
+      const brief = await s.study(cube.cards, 0);
+      if (brief) fs.writeFileSync(path.join(runDir, "prep", `${s.id}.md`), brief);
+    }));
+  }
+
+  for (let pod = 0; pod < ev.pods; pod++) {
+    const prng = rng.fork(`pod${pod}`);
+    const order: Seat[] = ev.rotateSeats ? prng.shuffle([...seats]) : [...seats];
+    info(`pod ${pod + 1}/${ev.pods}: seating ${order.map((s) => s.id).join(" → ")}`);
+    recorder.event("pod_start", { pod, seating: order.map((s) => s.id) });
+
+    const draft = await runDraft({ seats: order, cube: cube.cards, event: ev, db, rng: prng.fork("draft"), pod, log: draftLog });
+    info(`pod ${pod + 1}: draft done`);
+    const deckDir = path.join(runDir, `pod${pod}`, "decks");
+    const decks: Deck[] = await Promise.all(order.map((s, i) => buildDeck(s, draft.pools[i], ev, db, pod)));
+    const deckFiles = decks.map((d) => saveDeck(deckDir, d));
+    info(`pod ${pod + 1}: decks built (${decks.map((d) => d.main.length).join(", ")} cards)`);
+
+    const n = order.length;
+    const points = new Array(n).fill(0);
+    const played = new Set<string>();
+    const nRounds = ev.format === "round-robin" ? n - 1 : ev.rounds;
+    const rr = ev.format === "round-robin" ? roundRobin(n) : null;
+    for (let round = 0; round < nRounds; round++) {
+      const pairs = rr ? rr[round] : swissRound(n, points, played, round, prng.fork(`swiss${round}`));
+      const results = await pool(pairs, ev.parallelMatches, async ([a, b]) => {
+        const matchId = `p${pod}-r${round + 1}-${order[a].id}-vs-${order[b].id}`;
+        let res: MatchResult;
+        try {
+          res = await engine.playMatch({
+            matchId, pod, round: round + 1, seats: [order[a], order[b]], decks: [decks[a], decks[b]],
+            deckFiles: [deckFiles[a], deckFiles[b]], gamesPerMatch: ev.gamesPerMatch, seed: prng.fork(matchId).int(2 ** 31),
+            maxGameTurns: ev.maxGameTurns, runDir,
+          });
+        } catch (e: any) {
+          res = { matchId, pod, round: round + 1, seats: [order[a].id, order[b].id], games: [], winner: null, error: String(e?.message ?? e) };
+        }
+        matchLog.write(res);
+        const score = res.games.map((g) => (g.winner === 0 ? "W" : g.winner === 1 ? "L" : "D")).join("");
+        info(`  r${round + 1} ${order[a].id} vs ${order[b].id}: ${res.winner === 0 ? order[a].id : res.winner === 1 ? order[b].id : "draw"} (${score})${res.error ? ` ERROR ${res.error}` : ""}`);
+        return { res, a, b };
+      });
+      for (const { res, a, b } of results) {
+        allMatches.push(res);
+        played.add(a < b ? `${a}-${b}` : `${b}-${a}`);
+        if (res.winner === 0) points[a] += 3; else if (res.winner === 1) points[b] += 3; else { points[a] += 1; points[b] += 1; }
+      }
+    }
+    recorder.event("pod_end", { pod, standings: order.map((s, i) => ({ seat: s.id, points: points[i] })).sort((x, y) => y.points - x.points) });
+  }
+
+  const ratings = rate(outcomesFromMatches(allMatches), { bootstrap: 500, seed: ev.seed });
+  fs.writeFileSync(path.join(runDir, "ratings.json"), JSON.stringify(ratings, null, 2));
+  recorder.event("run_end", { matches: allMatches.length });
+  draftLog.close(); matchLog.close(); recorder.close();
+  await engine.close?.();
+  writeReport(runDir, cfg);
+  return { runId, runDir, ratings };
+}

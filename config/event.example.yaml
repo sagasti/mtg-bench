@@ -1,0 +1,81 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# mtg-bench event config. Copy to config/<name>.yaml and edit.
+# Full reference: docs/AGENTS.md (seats) and docs/PROMPTS.md (knowledge).
+# API keys NEVER go in this file — only the NAME of the env var holding them.
+# ─────────────────────────────────────────────────────────────────────────────
+
+event:
+  name: pauper-v1                 # label for the run folder; never shown to agents
+  cube: "Adam Styborkski's Pauper Cube"   # a cube bundled with Forge (see `bench cubes`) or a path to a .dck/.txt list; never shown to agents
+  pods: 4                         # independent draft pods (reseated each pod); ratings pool all pods
+  seed: 42
+  format: round-robin             # round-robin (7 rounds, every pair once) | swiss
+  rounds: 3                       # swiss only
+  gamesPerMatch: 3                # best-of-3
+  packs: 3
+  packSize: 15
+  minDeckSize: 40
+  knowledge: oracle+tools+primer  # names | oracle | oracle+tools | oracle+tools+primer
+  cubeStudy: true                 # each LLM seat writes its own strategy brief before the draft
+  briefMaxWords: 1000
+  briefScope: all                 # draft | all (draft + deckbuild + games)
+  carryNotes: true                # agents may keep a scratchpad between decisions
+  promptVersion: v1               # prompts/v1/*
+  maxToolCallsPerDecision: 6
+  maxRetries: 2                   # re-asks after an illegal answer before falling back
+  decisionTimeoutSec: 180
+  maxGameTurns: 40                # draw after this many turns
+  parallelMatches: 4              # matches in a round run concurrently
+
+engine:
+  type: forge                     # forge | mock (mock = pipeline testing only)
+  forgeDir: ~/forge               # Forge install dir (contains res/ and forge-gui-desktop-*-jar-with-dependencies.jar)
+  # forgeJar: ~/forge/forge-gui-desktop-2.0.xx-jar-with-dependencies.jar   # auto-detected if omitted
+  # bridgeJar: bridge/build/mtg-bench-bridge.jar                          # default
+  javaOpts: ["-Xmx3g"]
+  matchTimeoutSec: 7200
+
+outputDir: runs
+
+# USD per 1M tokens, keyed by model id. Fill in from each provider's pricing page;
+# models without an entry show "n/a" for cost (token counts are always recorded).
+pricing: {}
+#  claude-opus-5-5:   { input: 0.0, output: 0.0, cacheRead: 0.0, cacheWrite: 0.0 }
+#  claude-sonnet-5:   { input: 0.0, output: 0.0, cacheRead: 0.0, cacheWrite: 0.0 }
+
+# Exactly 8 seats. `id` is what appears in ratings; keep it stable across runs.
+seats:
+  - id: claude-opus
+    provider: anthropic
+    model: claude-opus-5-5
+    apiKeyEnv: ANTHROPIC_API_KEY
+    maxTokens: 4096
+    # thinkingBudget: 4000        # enables extended thinking
+
+  - id: claude-sonnet
+    provider: anthropic
+    model: claude-sonnet-5
+    apiKeyEnv: ANTHROPIC_API_KEY
+    maxTokens: 4096
+
+  - id: openai-model
+    provider: openai
+    model: REPLACE-with-openai-model-id
+    apiKeyEnv: OPENAI_API_KEY
+    maxTokens: 4096
+    # reasoningEffort: medium
+
+  - id: gemini-model
+    provider: gemini              # Google's OpenAI-compatible endpoint
+    model: REPLACE-with-gemini-model-id
+    apiKeyEnv: GEMINI_API_KEY
+
+  - id: openrouter-model
+    provider: openrouter          # any model on OpenRouter
+    model: REPLACE-with-vendor/model
+    apiKeyEnv: OPENROUTER_API_KEY
+
+  # Reference anchors: free, deterministic, keep ratings comparable across versions.
+  - { id: forge-ai, provider: forge-ai }   # Forge's own AI plays; drafts like rank-bot
+  - { id: rank-bot, provider: rank-bot }   # CubeCobra-rank drafter, greedy player
+  - { id: random,   provider: random }     # floor

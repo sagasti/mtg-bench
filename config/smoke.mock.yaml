@@ -1,0 +1,24 @@
+# Offline smoke test: no API keys, mock engine. Exercises every harness path.
+event:
+  name: smoke
+  cube: "Adam Styborkski's Pauper Cube"
+  pods: 1
+  seed: 7
+  format: round-robin
+  gamesPerMatch: 3
+  knowledge: oracle+tools+primer
+  cubeStudy: true
+engine:
+  type: mock
+forgeRes: ~/forge/res        # or pass --forge-res; only used to find the cube list + rankings
+pricing:
+  echo-large: { input: 3, output: 15 }
+seats:
+  - { id: echo-a, provider: echo, model: echo-large }
+  - { id: echo-b, provider: echo, model: echo-large }
+  - { id: rank-1, provider: rank-bot }
+  - { id: rank-2, provider: rank-bot }
+  - { id: rank-3, provider: rank-bot }
+  - { id: forge-ai, provider: forge-ai }
+  - { id: random-1, provider: random }
+  - { id: random-2, provider: random }
