@@ -72,9 +72,9 @@ Per-match Forge logs are in `runs/<run>/forge-logs/<matchId>.log`. Add `--verbos
 
 ## What the agent decides vs. what Forge AI decides (v1)
 
-**Agent:** mulligan; which cards to bottom; every priority stop (play land / cast spell / activate ability / pass); targets for its own spells and its own triggered abilities; attackers (including which planeswalker/battle); blockers; discard; generic "choose a card/player", "choose N cards" and yes/no prompts from effects.
+**Agent:** mulligan; which cards to bottom; every priority stop (play land / cast spell / activate ability / pass); targets for its own spells and its own triggered abilities, including spells and abilities on the stack (counterspells); attackers (including which planeswalker/battle); blockers; discard; generic "choose a card/player", "choose N cards" and yes/no prompts from effects.
 
-**Forge AI (for now):** mana payment and which lands to tap; X values; additional/optional costs paid as costs (sacrifice/discard costs); charm/modal choices; divided damage; targets for counterspells (spells on the stack); ordering simultaneous triggers; damage assignment order among multiple blockers; scry/surveil; choosing numbers/colours/piles; sideboarding (disabled; the same deck is used every game).
+**Forge AI (for now):** mana payment and which lands to tap; X values; additional/optional costs paid as costs (sacrifice/discard costs); charm/modal choices; divided damage; ordering simultaneous triggers; damage assignment order among multiple blockers; scry/surveil; choosing numbers/colours/piles; sideboarding (disabled; the same deck is used every game).
 
 **Priority stops** (`smart`, the default): the agent is asked only when it has at least one legal non-mana action AND the moment matters: its own main phases; its own declare-blockers step (combat tricks); the opponent's upkeep, declare-attackers, declare-blockers and end step; and whenever the opponent has something on the stack. This cuts calls several-fold compared with asking at every priority pass.
 

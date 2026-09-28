@@ -22,6 +22,7 @@ import forge.ai.PlayerControllerAi;
 import forge.game.Game;
 import forge.game.GameEndReason;
 import forge.game.GameEntity;
+import forge.game.GameObject;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
@@ -34,6 +35,7 @@ import forge.game.player.DelayedReveal;
 import forge.game.player.Player;
 import forge.game.player.PlayerActionConfirmMode;
 import forge.game.spellability.SpellAbility;
+import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.spellability.TargetChoices;
 import forge.game.spellability.TargetRestrictions;
 import forge.game.zone.ZoneType;
@@ -285,16 +287,12 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         for (SpellAbility cur = root; cur != null; cur = cur.getSubAbility()) {
             if (!cur.usesTargeting()) continue;
             TargetRestrictions tr = cur.getTargetRestrictions();
-            if (tr == null || cur.isDividedAsYouChoose() || tr.getZone().contains(ZoneType.Stack)) continue; // v1: AI handles these
-            List<GameEntity> cands = tr.getAllCandidates(cur, false);
-            if (cands.isEmpty()) continue;
+            if (tr == null || cur.isDividedAsYouChoose()) continue; // divided damage: still AI (see FORGE_SETUP.md)
             Card host = cur.getHostCard();
-            int min = tr.getMinTargets(host, cur);
-            int max = Math.min(tr.getMaxTargets(host, cur), cands.size());
-            if (max <= 0) continue;
             List<Opt> opts = new ArrayList<>();
-            Map<String, GameEntity> byId = new HashMap<>();
-            for (GameEntity e : cands) {
+            Map<String, GameObject> byId = new HashMap<>();
+            // Players and permanents/cards in the target zones
+            for (GameEntity e : tr.getAllCandidates(cur, false)) {
                 String id; String label; String cardName = null; JsonObject meta = new JsonObject();
                 if (e instanceof Player p) {
                     id = p.equals(player) ? "you" : "opponent";
@@ -310,6 +308,28 @@ public class PlayerControllerExternal extends PlayerControllerAi {
                 byId.put(id, e);
                 opts.add(new Opt(id, label, cardName, meta));
             }
+            // Spells and abilities on the stack (counterspells, redirect effects, ...)
+            if (tr.getZone().contains(ZoneType.Stack)) {
+                int k = 0;
+                for (SpellAbilityStackInstance si : getGame().getStack()) {
+                    SpellAbility onStack = si.getSpellAbility();
+                    k++;
+                    if (onStack == null || onStack.getRootAbility() == cur.getRootAbility() || !cur.canTargetSpellAbility(onStack)) continue;
+                    Card src = onStack.getHostCard();
+                    boolean mine = player.equals(onStack.getActivatingPlayer());
+                    String id = "stack" + k; // k = 1 is the top of the stack
+                    JsonObject meta = new JsonObject();
+                    meta.addProperty("hostile", !mine);
+                    String what = onStack.isSpell() ? "spell" : "ability";
+                    opts.add(new Opt(id, (k == 1 ? "[top of stack] " : "[stack #" + k + "] ") + (mine ? "your " : "opponent's ") + what + " "
+                            + (src != null ? src.getName() : "?") + " — " + truncate(si.getStackDescription(), 160), src != null ? src.getName() : null, meta));
+                    byId.put(id, onStack);
+                }
+            }
+            if (opts.isEmpty()) continue;
+            int min = tr.getMinTargets(host, cur);
+            int max = Math.min(tr.getMaxTargets(host, cur), opts.size());
+            if (max <= 0) continue;
             JsonObject extra = new JsonObject();
             extra.addProperty("casting", host != null ? host.getName() : "?");
             extra.addProperty("abilityText", truncate(cur.getDescription(), 300));
