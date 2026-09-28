@@ -31,7 +31,7 @@ import forge.util.MyRandom;
  * Entry point launched by the harness for one match:
  *   java -cp forge-gui-desktop-...-jar-with-dependencies.jar:mtg-bench-bridge.jar forge.bridge.AgentBridge \
  *     --port P --token T --deck0 a.dck --deck1 b.dck --external0 true --external1 false \
- *     --games 3 --seed 42 --max-turns 40 [--stops smart|all]
+ *     --games 3 --seed 42 --max-turns 40 [--stops smart|all] [--mana smart|always]
  * Must run with the Forge install (the directory containing res/) as working directory.
  */
 public final class AgentBridge {
@@ -50,7 +50,7 @@ public final class AgentBridge {
             long seed = Long.parseLong(a.getOrDefault("seed", "1"));
             MyRandom.setRandom(new Random(seed));
             int games = Integer.parseInt(a.getOrDefault("games", "3"));
-            MatchContext ctx = new MatchContext(Integer.parseInt(a.getOrDefault("max-turns", "40")), !"all".equals(a.get("stops")));
+            MatchContext ctx = new MatchContext(Integer.parseInt(a.getOrDefault("max-turns", "40")), !"all".equals(a.get("stops")), "always".equals(a.get("mana")));
 
             GameRules rules = new GameRules(GameType.Draft);
             rules.setAppliedVariants(EnumSet.of(GameType.Draft));

@@ -85,7 +85,7 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
           res = await engine.playMatch({
             matchId, pod, round: round + 1, seats: [order[a], order[b]], decks: [decks[a], decks[b]],
             deckFiles: [deckFiles[a], deckFiles[b]], gamesPerMatch: ev.gamesPerMatch, seed: prng.fork(matchId).int(2 ** 31),
-            maxGameTurns: ev.maxGameTurns, runDir,
+            maxGameTurns: ev.maxGameTurns, runDir, priorityStops: ev.priorityStops, manaPayment: ev.manaPayment,
           });
         } catch (e: any) {
           res = { matchId, pod, round: round + 1, seats: [order[a].id, order[b].id], games: [], winner: null, error: String(e?.message ?? e) };

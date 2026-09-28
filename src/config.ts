@@ -65,6 +65,10 @@ export interface EventConfig {
   briefScope: "draft" | "all";
   /** Matches run concurrently within a round (each match is independent). */
   parallelMatches: number;
+  /** Forge: smart = ask at meaningful priority stops only; all = every priority pass. */
+  priorityStops: "smart" | "all";
+  /** Forge: smart = ask which lands to tap only when the choice can matter; always = every payment. */
+  manaPayment: "smart" | "always";
 }
 
 export interface EngineConfig {
@@ -94,7 +98,7 @@ const EVENT_DEFAULTS: Omit<EventConfig, "name" | "cube"> = {
   pods: 1, seed: 1, packs: 3, packSize: 15, format: "round-robin", rounds: 3, gamesPerMatch: 3, minDeckSize: 40,
   knowledge: "oracle+tools", promptVersion: "v1", maxToolCallsPerDecision: 6, maxRetries: 2,
   decisionTimeoutSec: 180, carryNotes: true, maxGameTurns: 40, rotateSeats: true,
-  cubeStudy: true, briefMaxWords: 1000, briefScope: "all", parallelMatches: 4,
+  cubeStudy: true, briefMaxWords: 1000, briefScope: "all", parallelMatches: 4, priorityStops: "smart", manaPayment: "smart",
 };
 
 export function loadConfig(file: string): BenchConfig {

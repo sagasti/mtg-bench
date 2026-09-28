@@ -20,6 +20,8 @@ export class RandomBot implements Bot {
   constructor(private rng: Rng, private db: CardDb) {}
   choose(req: DecisionRequest): DecisionResponse {
     if (req.kind === "deckbuild") return randomDeck(req, this.db, this.rng);
+    // Tapping every offered source lets the engine pick a legal payment; a random subset usually can't pay.
+    if (req.kind === "mana_payment") return { choice: req.options.map((o) => o.id) };
     const ids = this.rng.shuffle(req.options.map((o) => o.id));
     const hi = Math.min(req.max, ids.length);
     let k = req.min + this.rng.int(hi - req.min + 1);
@@ -102,6 +104,10 @@ export class RankBot implements Bot {
         }
         return { choice: out.length >= req.min ? out : req.options.slice(0, req.min).map((o) => o.id) };
       }
+      case "mana_payment":
+        return { choice: req.options.map((o) => o.id) };
+      case "play_draw":
+        return { choice: [req.options.find((o) => o.id === "yes")?.id ?? req.options[0].id] };
       case "london_bottom":
       case "discard": {
         const sorted = [...req.options].sort((a, b) => this.score(a.card) - this.score(b.card));

@@ -20,6 +20,20 @@ export type DecisionKind =
   | "choose_cards"    // generic "choose between min and max cards"
   | "confirm"         // generic yes / no
   | "discard"         // discard to hand size / discard effects
+  | "play_draw"       // play or draw first
+  | "choose_ability"  // which version of a spell/ability (alternative additional costs, ...)
+  | "optional_costs"  // kicker, buyback, entwine, ...
+  | "announce_x"      // value of X (or other announced numbers)
+  | "choose_mode"     // modes of charms / modal spells
+  | "divide"          // divide damage/counters among targets
+  | "cost_choice"     // which cards pay a sacrifice/discard/exile/tap cost, delve
+  | "mana_payment"    // which mana sources to tap
+  | "pay_or_else"     // "counter unless you pay {3}" etc.
+  | "order_triggers" | "order_library" | "scry_order" | "surveil_order"   // one pick at a time: "which is first?"
+  | "assign_damage"   // split combat damage among blockers (and player, with trample)
+  | "exert"
+  | "scry" | "surveil" | "search"
+  | "choose_number" | "choose_color" | "choose_option"
   | "cube_study";     // pre-draft strategy brief (free text, not an option choice)
 
 export interface DecisionOption {

@@ -7,7 +7,7 @@ Every run writes to `runs/<runId>/`:
 | `usage.jsonl` | **model API call** | seat, provider, model, phase, kind, requestId, matchId, game, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens`, `latencyMs`, `stopReason`, `httpStatus`, `error`, `toolCallsRequested` |
 | `decisions.jsonl` | **decision** | the same ids, token totals for the decision, `numOptions`, `choice`, `choiceLabels`, `valid`, `invalidAttempts`, `fallback`, `autoResolved`, `modelCalls`, `toolCalls` by name, `latencyMs`, `rationale`, `error` |
 | `draft.jsonl` | draft pick | seat, pack, pick, card taken, full pack contents |
-| `matches.jsonl` | match | seats, per-game winner, on-the-play, turns, end reason, decisions per seat, duration |
+| `matches.jsonl` | match | seats, per-game winner, on-the-play, turns, end reason, decisions per seat, duration, `delegations` (decisions Forge's AI made for an agent) |
 | `events.jsonl` | run/pod milestone | seating, standings, cube size |
 | `pod<N>/decks/*.dck, *.json` | deck | main deck, sideboard, basics |
 | `prep/<seat>.md` | seat | cube-study brief |
@@ -32,7 +32,8 @@ Decisions with exactly one legal answer are **auto-resolved** and never sent to 
 3. **By seat × phase**: study / draft / deckbuild / game split of tokens and cost.
 4. **By decision kind**: average tokens, invalid answers and fallbacks per kind (e.g. are blockers expensive? do models flub targets?).
 5. **Reliability and tool use**: invalid answers, fallback rate, API errors, knowledge-tool calls by tool.
-6. **Games**: average length, on-the-play win rate, end reasons, failed matches.
+6. **Decisions made by Forge AI on an agent's behalf**: count per seat, share of that seat's game decisions, and the most common kinds with reasons.
+7. **Games**: average length, on-the-play win rate, end reasons, failed matches.
 
 ## Commands
 

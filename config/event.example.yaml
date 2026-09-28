@@ -26,6 +26,8 @@ event:
   decisionTimeoutSec: 180
   maxGameTurns: 40                # draw after this many turns
   parallelMatches: 4              # matches in a round run concurrently
+  priorityStops: smart            # Forge: smart = ask at meaningful priority stops; all = every priority pass
+  manaPayment: smart              # Forge: smart = ask which lands to tap when it can matter; always = every payment
 
 engine:
   type: forge                     # forge | mock (mock = pipeline testing only)

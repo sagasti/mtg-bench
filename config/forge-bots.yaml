@@ -26,6 +26,8 @@ event:
   decisionTimeoutSec: 180
   maxGameTurns: 40                # draw after this many turns
   parallelMatches: 4              # matches in a round run concurrently
+  priorityStops: smart
+  manaPayment: smart
 
 engine:
   type: forge                     # forge | mock (mock = pipeline testing only)

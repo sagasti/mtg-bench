@@ -63,7 +63,11 @@ Agents never see:
 
 ## When an agent fails
 
-Per decision the harness validates the answer. An illegal answer is sent back with the reason ("unknown option id …") and the agent may try again, up to `maxRetries`. After that, or on an API error or timeout, the seat's fallback plays the `rank-bot` choice. Inside Forge, the fallback is Forge's AI choice. Every fallback is logged, and the fallback rate appears per seat in the report. A seat with a high fallback rate isn't really being measured, so check it before trusting a rating.
+There are two kinds of substitution, and both are reported:
+- **Fallback** (harness): the model didn't produce a valid answer, so `rank-bot`'s choice is used. It's shown per seat in the report's reliability table.
+- **Delegated** (Forge): Forge's own AI decided, either because the answer was rejected inside the engine (e.g. an illegal block) or because it's one of the few decision types not yet offered to agents. It's shown in its own report section.
+
+Per decision the harness validates the answer. An illegal answer is sent back with the reason ("unknown option id …") and the agent may try again, up to `maxRetries`. After that, or on an API error or timeout, the seat's fallback plays the `rank-bot` choice. Every fallback is logged, and the fallback rate appears per seat in the report. A seat with a high fallback rate isn't really being measured, so check it before trusting a rating.
 
 API errors 429, 408, 529 and 5xx are retried with exponential backoff, honouring `Retry-After`.
 
@@ -78,4 +82,4 @@ Rough call counts per pod, with `round-robin` and best-of-3:
 | Deckbuild | 1 |
 | Games | 7 matches × about 2.5 games × **N** decisions per game |
 
-N depends on the engine. In the mock engine it's about 60, and in Forge with smart priority stops expect around 60–150. Run one pod with a single LLM seat first and read `report.md`: *Tokens/decision* and *Tokens by seat × phase* will give you a real per-pod cost before you scale up `pods`.
+N depends on the engine. In the mock engine it's about 60. In Forge, agents now make every sub-decision (targets, X, modes, which lands to tap, damage assignment, scry…) and ordering questions are asked one pick at a time, so expect roughly 100–250 per game with smart priority stops and smart mana payment. Run one pod with a single LLM seat first and read `report.md`: *Tokens/decision* and *Tokens by seat × phase* will give you a real per-pod cost before you scale up `pods`.

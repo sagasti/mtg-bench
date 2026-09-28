@@ -77,7 +77,16 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
   const decided = games.filter((g) => g.winner !== null);
   const playWins = decided.filter((g) => g.winner === g.onThePlay).length;
 
-  return { decisions, calls, matches, bySeat, bySeatPhase, byKind, ratings, games, reasons, playWinRate: decided.length ? playWins / decided.length : null, pricing };
+  // Decisions Forge's AI made on an agent's behalf (Forge engine only)
+  const delegated = new Map<string, Map<string, number>>();
+  for (const m of matches) for (const d of m.delegations ?? []) {
+    const seat = m.seats[d.seat];
+    if (!delegated.has(seat)) delegated.set(seat, new Map());
+    const key = `${d.what} (${d.reason})`;
+    delegated.get(seat)!.set(key, (delegated.get(seat)!.get(key) ?? 0) + 1);
+  }
+
+  return { decisions, calls, matches, bySeat, bySeatPhase, byKind, ratings, games, reasons, delegated, playWinRate: decided.length ? playWins / decided.length : null, pricing };
 }
 
 export function renderReport(s: ReturnType<typeof summarize>, title: string): string {
@@ -125,6 +134,21 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
   }
   L.push("");
 
+  L.push("## Decisions made by Forge AI on an agent's behalf", "");
+  if (!s.delegated.size) L.push("None recorded (or not a Forge run).", "");
+  else {
+    L.push("A high share means the rating partly reflects Forge's AI rather than the agent. Harness fallbacks (rank-bot) are counted separately above.", "");
+    L.push("| Seat | Delegated | Share of game decisions | Most common |", "|---|---|---|---|");
+    for (const [seat, m] of [...s.delegated.entries()].sort()) {
+      const total = [...m.values()].reduce((a, b) => a + b, 0);
+      const gameDecisions = s.bySeatPhase.get(`${seat}|game`);
+      const denom = gameDecisions ? gameDecisions.decisions + gameDecisions.autoResolved + total : total;
+      const top = [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k}: ${v}`).join("; ");
+      L.push(`| ${seat} | ${total} | ${denom ? ((100 * total) / denom).toFixed(1) : "–"}% | ${top} |`);
+    }
+    L.push("");
+  }
+
   L.push("## Games", "");
   const turns = s.games.map((g) => g.turns);
   L.push(`Average length: ${turns.length ? (turns.reduce((a, b) => a + b, 0) / turns.length).toFixed(1) : "–"} turns · On-the-play win rate: ${s.playWinRate === null ? "–" : `${(100 * s.playWinRate).toFixed(1)}%`}`);
@@ -141,6 +165,7 @@ export function writeReport(runDir: string, cfg?: BenchConfig) {
     ratings: s.ratings,
     seats: Object.fromEntries([...s.bySeat.entries()].map(([id, a]) => [id, { ...a, latencies: undefined, p50LatencyMs: pct(a.latencies, 0.5), p95LatencyMs: pct(a.latencies, 0.95) }])),
     games: s.games.length, reasons: s.reasons, playWinRate: s.playWinRate,
+    delegated: Object.fromEntries([...s.delegated.entries()].map(([k, m]) => [k, Object.fromEntries(m)])),
   };
   fs.writeFileSync(path.join(runDir, "summary.json"), JSON.stringify(json, null, 2));
 }

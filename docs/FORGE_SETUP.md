@@ -70,12 +70,27 @@ Per-match Forge logs are in `runs/<run>/forge-logs/<matchId>.log`. Add `--verbos
 | Games end in `turn-cap` draws a lot | Raise `maxGameTurns`, or check whether an agent always passes (see `priority` decisions). |
 | Very slow games | `parallelMatches` × Forge JVM memory. Each match is one JVM (`-Xmx3g`); lower `parallelMatches` or `-Xmx`. |
 
-## What the agent decides vs. what Forge AI decides (v1)
+## What the agent decides vs. what Forge AI decides
 
-**Agent:** mulligan; which cards to bottom; every priority stop (play land / cast spell / activate ability / pass); targets for its own spells and its own triggered abilities, including spells and abilities on the stack (counterspells); attackers (including which planeswalker/battle); blockers; discard; generic "choose a card/player", "choose N cards" and yes/no prompts from effects.
+Spells and abilities the agent chooses are cast through Forge's **generic casting path** (the one human players use), which asks the player for every sub-decision. Each of those goes to the agent.
 
-**Forge AI (for now):** mana payment and which lands to tap; X values; additional/optional costs paid as costs (sacrifice/discard costs); charm/modal choices; divided damage; ordering simultaneous triggers; damage assignment order among multiple blockers; scry/surveil; choosing numbers/colours/piles; sideboarding (disabled; the same deck is used every game).
+| Area | Agent decides |
+|---|---|
+| Game start | play/draw, mulligan, which cards to bottom |
+| Priority | play land / cast / activate / pass (see stops below) |
+| Casting | which version (alternative additional costs), optional costs (kicker, buyback, entwine…), **X**, **modes**, **targets** (incl. spells on the stack), **divided damage**, **which cards pay** sacrifice/discard/exile/return/tap costs, delve, **which lands to tap** |
+| "Unless you pay" | whether to pay (Mana Leak, Rhystic Study…), and how |
+| Triggers | optional "may" triggers, **order** of simultaneous triggers, their targets and modes |
+| Combat | attackers (and which planeswalker/battle), exert, blockers, **combat damage assignment** (incl. trample) |
+| Library | **scry / surveil** (and the order of cards kept on top), ordering cards put into the library, searching (tutors, fetch effects) |
+| Effects | edicts (choose what to sacrifice/destroy), discard, choose a card/player/number/colour/type/pile/counter/keyword/replacement effect, yes/no prompts |
 
-**Priority stops** (`smart`, the default): the agent is asked only when it has at least one legal non-mana action AND the moment matters: its own main phases; its own declare-blockers step (combat tricks); the opponent's upkeep, declare-attackers, declare-blockers and end step; and whenever the opponent has something on the stack. This cuts calls several-fold compared with asking at every priority pass.
+**Mana payment:** the agent chooses *which* sources to tap. Forge then assigns them to the cost's symbols (colours, hybrid, and so on) using only those sources. A choice that can't pay is sent back once with an error. The question is only asked when it can matter, i.e. there are more untapped sources than the cost needs *and* they aren't all the same card (`event.manaPayment: smart`); set `always` to ask on every payment.
+
+**Still Forge AI** (rare in cube, and each one reported as *delegated*): naming an arbitrary card, convoke/improvise, "add mana in any combination", choosing several spells at once, choosing modes that may repeat, and damage-assignment order under the legacy rules (off by default). Also: any decision where the agent's answer is missing or illegal, when a split has too many options to list (over 60), or when a number range is over 40.
+
+**Delegated decisions are counted.** Every time Forge's AI decides for an agent, the bridge reports it, and `report.md` shows the count per seat and the share of that seat's game decisions. If the share is high, the rating partly reflects Forge's AI, so check it before trusting a result.
+
+**Priority stops** (`event.priorityStops: smart`, the default; `all` asks at every priority pass): the agent is asked only when it has at least one legal non-mana action AND the moment matters: its own main phases; its own declare-blockers step (combat tricks); the opponent's upkeep, declare-attackers, declare-blockers and end step; and whenever the opponent has something on the stack. This cuts calls several-fold compared with asking at every priority pass.
 
 Each of these delegations is a knob we can move to the agent later, in `PlayerControllerExternal.java`.

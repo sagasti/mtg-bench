@@ -15,7 +15,7 @@ import readline from "node:readline";
 import type { EngineConfig } from "../../config.ts";
 import type { DecisionKind, DecisionRequest } from "../../types.ts";
 import { debug } from "../../util/log.ts";
-import type { GameEngine, GameResult, MatchResult, MatchSpec } from "../types.ts";
+import type { Delegation, GameEngine, GameResult, MatchResult, MatchSpec } from "../types.ts";
 
 export function findForgeJar(forgeDir: string): string | undefined {
   const cands: string[] = [];
@@ -52,6 +52,7 @@ export class ForgeEngine implements GameEngine {
     if (!fs.existsSync(bridgeJar)) throw new Error(`bridge jar not found at ${bridgeJar}; run bridge/build.sh`);
     const token = crypto.randomBytes(16).toString("hex");
     const games: GameResult[] = [];
+    const delegations: Delegation[] = [];
     const decisions: [number, number] = [0, 0];
     let current: { game: number; onThePlay: 0 | 1; t0: number } | null = null;
     const logDir = path.join(spec.runDir, "forge-logs");
@@ -71,7 +72,7 @@ export class ForgeEngine implements GameEngine {
         try { fs.closeSync(logFile); } catch { /* ignore */ }
         const w0 = games.filter((g) => g.winner === 0).length, w1 = games.filter((g) => g.winner === 1).length;
         resolve({ matchId: spec.matchId, pod: spec.pod, round: spec.round, seats: [spec.seats[0].id, spec.seats[1].id], games,
-          winner: w0 > w1 ? 0 : w1 > w0 ? 1 : null, error });
+          winner: w0 > w1 ? 0 : w1 > w0 ? 1 : null, delegations, error });
       };
       const timer = setTimeout(() => finish(`match timeout after ${this.cfg.matchTimeoutSec ?? 7200}s`), (this.cfg.matchTimeoutSec ?? 7200) * 1000);
 
@@ -113,6 +114,9 @@ export class ForgeEngine implements GameEngine {
                 reason: msg.reason ?? "unknown", decisions: [...decisions] as [number, number], durationMs: current ? Date.now() - current.t0 : 0,
               });
               break;
+            case "delegated":
+              delegations.push({ seat: msg.seat, game: msg.game, what: msg.what, reason: msg.reason });
+              break;
             case "match_end": finish(); break;
             case "error": fs.writeSync(logFile, `[bridge error] ${msg.msg}\n`); break;
             case "log": debug(`[forge ${spec.matchId}] ${msg.msg}`); break;
@@ -133,6 +137,7 @@ export class ForgeEngine implements GameEngine {
           "--deck0", path.resolve(spec.deckFiles[0]), "--deck1", path.resolve(spec.deckFiles[1]),
           "--external0", String(!spec.seats[0].usesForgeAi), "--external1", String(!spec.seats[1].usesForgeAi),
           "--games", String(spec.gamesPerMatch), "--seed", String(spec.seed), "--max-turns", String(spec.maxGameTurns),
+          "--stops", spec.priorityStops, "--mana", spec.manaPayment,
         ];
         fs.writeSync(logFile, `$ ${this.cfg.java ?? "java"} ${args.join(" ")}\n(cwd ${cwd})\n`);
         child = spawn(this.cfg.java ?? "java", args, { cwd, stdio: ["ignore", logFile, logFile] });

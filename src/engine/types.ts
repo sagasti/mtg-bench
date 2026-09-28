@@ -18,7 +18,14 @@ export interface MatchSpec {
   seed: number;
   maxGameTurns: number;
   runDir: string;
+  /** smart = ask only at meaningful priority stops; all = every time the agent gets priority. */
+  priorityStops: "smart" | "all";
+  /** smart = ask which lands to tap only when it can matter; always = every mana payment. */
+  manaPayment: "smart" | "always";
 }
+
+/** A decision Forge's AI made on an agent's behalf (answer missing/illegal, or a rare decision type). */
+export interface Delegation { seat: 0 | 1; game: number; what: string; reason: string }
 
 export interface GameResult {
   game: number;                  // 1-based
@@ -37,6 +44,7 @@ export interface MatchResult {
   seats: [string, string];
   games: GameResult[];
   winner: 0 | 1 | null;
+  delegations?: Delegation[];
   error?: string;
 }
 
