@@ -14,9 +14,11 @@ export interface TokenUsage {
   cacheReadTokens: number;
   cacheWriteTokens: number;
   reasoningTokens: number;    // reported separately when the provider exposes it (subset of output)
+  reportedCostUsd: number;    // what the provider says it charged (OpenRouter usage.cost); 0 when not reported
+  costReportedCalls: number;  // calls that carried a reported cost, to tell "free" from "not reported"
 }
 
-export const ZERO_USAGE: TokenUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
+export const ZERO_USAGE: TokenUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, reportedCostUsd: 0, costReportedCalls: 0 };
 
 export function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
   return {
@@ -25,6 +27,8 @@ export function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
     cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens,
     cacheWriteTokens: a.cacheWriteTokens + b.cacheWriteTokens,
     reasoningTokens: a.reasoningTokens + b.reasoningTokens,
+    reportedCostUsd: a.reportedCostUsd + b.reportedCostUsd,
+    costReportedCalls: a.costReportedCalls + b.costReportedCalls,
   };
 }
 
@@ -46,6 +50,7 @@ export interface CallRecord extends TokenUsage {
   httpStatus?: number;
   error?: string;
   toolCallsRequested: number;
+  servedBy?: string;         // upstream host that served the call (OpenRouter routes one model across many)
 }
 
 export interface DecisionRecord extends TokenUsage {
@@ -65,7 +70,8 @@ export interface DecisionRecord extends TokenUsage {
   choiceLabels: string[];
   valid: boolean;            // final answer passed validation (false => fallback used)
   invalidAttempts: number;   // answers rejected by validation before the final one
-  fallback: boolean;         // harness had to substitute a legal choice
+  fallback: boolean;         // harness had to substitute a legal choice (rank-bot; deckbuild only)
+  forfeit?: boolean;         // agent failed the decision; the null action was played (pass / decline / none / first legal option)
   autoResolved: boolean;     // only one legal option; no model call made
   modelCalls: number;
   toolCalls: Record<string, number>;

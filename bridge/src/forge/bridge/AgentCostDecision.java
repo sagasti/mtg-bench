@@ -39,6 +39,7 @@ public class AgentCostDecision extends AiCostDecision {
 
     /** Let the agent choose which of `candidates` pays the cost; ai = the AI's legal payment. */
     private PaymentDecision choose(String what, CostPart cost, PaymentDecision ai, CardCollectionView candidates) {
+        if (ctl.castCancelled()) return null; // an earlier step of this cast was forfeited: refuse, so Forge rolls the cast back
         if (ai == null || ai.cards.isEmpty() || cost.payCostFromSource()) return ai;
         int n = ai.cards.size();
         if (candidates.size() <= n) return ai; // no real choice
@@ -49,6 +50,7 @@ public class AgentCostDecision extends AiCostDecision {
         String src = ability.getHostCard() != null ? ability.getHostCard().getName() : "this";
         CardCollection chosen = ctl.askCards("cost_choice",
                 "To pay the cost of " + src + ", choose " + n + " card(s) to " + what + ".", candidates, n, n);
+        if (ctl.castCancelled()) return null;
         if (chosen == null) {
             ctl.delegated("cost:" + what, "no valid answer");
             return ai;

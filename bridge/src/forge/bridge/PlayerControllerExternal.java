@@ -94,6 +94,12 @@ public class PlayerControllerExternal extends PlayerControllerAi {
     private int aiDepth = 0;
     /** Casts that rolled back, withheld from priority until the game state changes, so a bot can't re-pick them forever. */
     private final Set<String> failedCasts = new HashSet<>();
+    /** The harness flagged the last answer as a forfeit (the agent failed the decision; this is the null action). */
+    private boolean lastAnswerForfeit = false;
+    /** True while an agent-chosen cast is being set up and paid for. */
+    private boolean inAgentCast = false;
+    /** A sub-decision of the current cast was forfeited: the next cancellable step cancels the cast. */
+    private boolean castCancelled = false;
     private String failedCastsKey = "";
 
     public PlayerControllerExternal(Game game, Player p, LobbyPlayer lp, BridgeClient client, MatchContext ctx, int seat) {
@@ -131,6 +137,22 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         client.send(o);
     }
 
+    /** The agent failed a decision in-game and got the null action; counted against the agent, unlike a delegation. */
+    void forfeited(String what, String reason) {
+        JsonObject o = new JsonObject();
+        o.addProperty("type", "forfeit");
+        o.addProperty("seat", seat);
+        o.addProperty("game", ctx.game);
+        o.addProperty("what", what);
+        o.addProperty("reason", reason);
+        client.send(o);
+    }
+
+    /** A forfeited sub-decision during an agent cast: every later step of that cast refuses, so Forge rolls it back. */
+    boolean castCancelled() {
+        return inAgentCast && castCancelled;
+    }
+
     /** Ask the agent; returns chosen ids, or null if there's no valid answer. */
     List<String> ask(String kind, String prompt, List<Opt> options, int min, int max, JsonObject extraState, JsonObject hints) {
         max = Math.min(max, options.size());
@@ -150,6 +172,8 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         req.addProperty("max", max);
         if (hints != null) req.add("hints", hints);
         JsonObject ans = client.request(req);
+        lastAnswerForfeit = ans != null && ans.has("forfeit") && ans.get("forfeit").getAsBoolean();
+        if (lastAnswerForfeit && inAgentCast) castCancelled = true;
         if (ans == null || !ans.has("choice")) return null;
         Set<String> valid = new HashSet<>();
         for (Opt o : options) valid.add(o.id);
@@ -421,10 +445,19 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         }
         agentChosen = null;
         // Generic casting path: asks this controller for optional costs, X, modes, targets, cost choices and mana.
-        if (!PlaySpellAbility.playSpellAbility(this, player, sa)) {
-            client.log("cast of " + describe(sa) + " was cancelled or could not be paid; rolled back");
+        inAgentCast = true;
+        castCancelled = false;
+        boolean cast;
+        try {
+            cast = PlaySpellAbility.playSpellAbility(this, player, sa);
+        } finally {
+            inAgentCast = false;
+        }
+        if (!cast) {
+            client.log("cast of " + describe(sa) + (castCancelled ? " was forfeited (a decision failed); rolled back" : " was cancelled or could not be paid; rolled back"));
             failedCasts.add(castKey(sa));
         }
+        castCancelled = false;
         return true;
     }
 
@@ -491,6 +524,7 @@ public class PlayerControllerExternal extends PlayerControllerAi {
     @Override
     public Integer announceRequirements(SpellAbility ability, int min, int max, String announce) {
         if (ai()) return super.announceRequirements(ability, min, max, announce);
+        if (castCancelled()) return null;
         int cap = max;
         Cost cost = ability.getPayCosts();
         if ("X".equalsIgnoreCase(announce) && cost != null && cost.hasXInAnyCostPart()) {
@@ -503,6 +537,7 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         List<Opt> opts = new ArrayList<>();
         for (int v = min; v <= cap; v++) opts.add(new Opt("n" + v, announce + " = " + v, null));
         List<String> r = ask("announce_x", "Choose the value of " + announce + " for " + describe(ability) + ".", opts, 1, 1);
+        if (castCancelled()) return null;
         if (r == null) { delegated("announce_x", "no valid answer"); return asAi(() -> super.announceRequirements(ability, min, max, announce)); }
         return Integer.parseInt(r.get(0).substring(1));
     }
@@ -527,6 +562,7 @@ public class PlayerControllerExternal extends PlayerControllerAi {
     @Override
     public boolean chooseTargetsFor(SpellAbility cur) {
         if (ai()) return super.chooseTargetsFor(cur);
+        if (castCancelled()) return false;
         TargetRestrictions tr = cur.getTargetRestrictions();
         if (tr == null) return super.chooseTargetsFor(cur);
         Card host = cur.getHostCard();
@@ -571,6 +607,7 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         extra.addProperty("abilityText", truncate(cur.getDescription(), 300));
         List<String> r = ask("targets", "Choose target(s) for " + (host != null ? host.getName() : "this ability") + ": " + truncate(cur.getDescription(), 200),
                 opts, Math.min(min, max), max, extra, null);
+        if (castCancelled()) return false;
         if (r == null) { delegated("targets", "no valid answer"); return asAi(() -> super.chooseTargetsFor(cur)); }
         cur.clearTargets();
         List<GameObject> chosen = new ArrayList<>();
@@ -615,6 +652,7 @@ public class PlayerControllerExternal extends PlayerControllerAi {
     @Override
     public boolean payManaCost(ManaCost toPay, CostPartMana costPartMana, SpellAbility sa, String prompt, ManaConversionMatrix matrix, boolean effect) {
         if (ai()) return super.payManaCost(toPay, costPartMana, sa, prompt, matrix, effect);
+        if (castCancelled()) return false;
         Cost cost = new Cost(toPay, effect);
         ManaCostBeingPaid need;
         CardCollection sources;
@@ -641,9 +679,12 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         }
         String what = describe(sa);
         String error = "";
-        for (int attempt = 0; attempt < 2; attempt++) {
-            List<String> r = ask("mana_payment", error + "Pay " + need + " for " + what + ". Choose which mana sources to tap; only the sources you choose will be used "
+        for (int attempt = 0; attempt <= ctx.maxRetries; attempt++) {
+            int total = need.getConvertedManaCost();
+            List<String> r = ask("mana_payment", error + "Pay " + need + " (" + total + " mana in total, generic and coloured together) for " + what
+                    + ". Choose which mana sources to tap, enough to produce all " + total + " mana; only the sources you choose will be used "
                     + "(the engine assigns them to the cost). Sources you don't choose stay untapped.", opts, 1, opts.size(), null, null);
+            if (lastAnswerForfeit) return false; // harness already counted the forfeit; the cast is cancelled
             if (r == null) break;
             Set<String> keep = new HashSet<>(r);
             List<Card> reserved = new ArrayList<>();
@@ -664,10 +705,12 @@ public class PlayerControllerExternal extends PlayerControllerAi {
             } finally {
                 for (Card c : reserved) AiCardMemory.forgetCard(player, c, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL);
             }
-            error = "Your previous choice could not pay " + need + ". ";
+            error = "Your previous choice (" + r.size() + " source" + (r.size() == 1 ? "" : "s") + ") could not pay " + need + ", which needs " + total + " mana. ";
         }
-        delegated("mana_payment", "no valid answer");
-        return asAi(() -> super.payManaCost(toPay, costPartMana, sa, prompt, matrix, effect));
+        // The agent's sources never covered the cost: forfeit. During a cast that cancels the cast; for an effect, it goes unpaid.
+        forfeited("mana_payment", "chosen sources could not pay " + need + " in " + (ctx.maxRetries + 1) + " attempts");
+        if (inAgentCast) castCancelled = true;
+        return false;
     }
 
     @Override
@@ -786,9 +829,11 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         if (opts.isEmpty()) return;
         JsonObject hints = new JsonObject();
         hints.addProperty("opponentMaxUntappedPower", oppMaxPower);
-        List<String> r = ask("attackers", "Declare attackers. Choose any number (none = no attack). Each creature may attack only one defender.",
-                opts, 0, opts.size(), null, hints);
-        if (r != null) {
+        String error = "";
+        for (int attempt = 0; attempt <= ctx.maxRetries; attempt++) {
+            List<String> r = ask("attackers", error + "Declare attackers. Choose any number (none = no attack). Each creature may attack only one defender.",
+                    opts, 0, opts.size(), null, hints);
+            if (r == null) break;
             Set<Card> used = new HashSet<>();
             boolean ok = true;
             for (String id : r) {
@@ -797,10 +842,17 @@ public class PlayerControllerExternal extends PlayerControllerAi {
                 combat.addAttacker(c, defById.get(id));
             }
             if (ok && CombatUtil.validateAttackers(combat)) return;
-            client.error("agent attack declaration invalid; using AI attackers");
             for (Card c : new ArrayList<>(combat.getAttackers())) combat.removeFromCombat(c);
+            if (lastAnswerForfeit) break;
+            error = "Your previous attack was illegal: each creature attacks at most once, and some creatures must attack or can't attack in that combination. ";
         }
-        delegated("attackers", r == null ? "no valid answer" : "illegal attack (requirements/restrictions)");
+        // Null action: no attack, when that is legal. Only a forced attack ("attacks each combat if able") needs the engine's default.
+        boolean counted = lastAnswerForfeit; // the harness already counted its own forfeit
+        if (CombatUtil.validateAttackers(combat)) {
+            if (!counted) forfeited("attackers", "no legal attack in " + (ctx.maxRetries + 1) + " attempts; no attack");
+            return;
+        }
+        if (!counted) forfeited("attackers", "no legal attack in " + (ctx.maxRetries + 1) + " attempts; a required attack was declared by the engine");
         asAiRun(() -> super.declareAttackers(attacker, combat));
     }
 
@@ -835,9 +887,11 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         if (opts.isEmpty()) return;
         JsonObject hints = new JsonObject();
         hints.addProperty("incomingLethal", incoming >= defender.getLife());
-        List<String> r = ask("blockers", "Declare blockers. Each of your creatures can block one attacker; several can block the same attacker. Choose none to take the damage.",
-                opts, 0, defender.getCreaturesInPlay().size(), null, hints);
-        if (r != null) {
+        String error = "";
+        for (int attempt = 0; attempt <= ctx.maxRetries; attempt++) {
+            List<String> r = ask("blockers", error + "Declare blockers. Each of your creatures can block one attacker; several can block the same attacker. Choose none to take the damage.",
+                    opts, 0, defender.getCreaturesInPlay().size(), null, hints);
+            if (r == null) break;
             Set<Card> used = new HashSet<>();
             List<Card> added = new ArrayList<>();
             boolean ok = true;
@@ -847,11 +901,19 @@ public class PlayerControllerExternal extends PlayerControllerAi {
                 combat.addBlocker(p[1], p[0]);
                 added.add(p[0]);
             }
-            if (ok && CombatUtil.validateBlocks(combat, defender) == null) return;
-            client.error("agent block declaration invalid; using AI blocks");
+            String why = ok ? CombatUtil.validateBlocks(combat, defender) : "a creature can block only one attacker";
+            if (why == null) return;
             for (Card b : added) combat.removeFromCombat(b);
+            if (lastAnswerForfeit) break;
+            error = "Your previous blocks were illegal (" + why + "). ";
         }
-        delegated("blockers", r == null ? "no valid answer" : "illegal blocks (menace/requirements)");
+        // Null action: no blocks, when that is legal; otherwise the engine's default satisfies the block requirement.
+        boolean counted = lastAnswerForfeit;
+        if (CombatUtil.validateBlocks(combat, defender) == null) {
+            if (!counted) forfeited("blockers", "no legal blocks in " + (ctx.maxRetries + 1) + " attempts; no blocks");
+            return;
+        }
+        if (!counted) forfeited("blockers", "no legal blocks in " + (ctx.maxRetries + 1) + " attempts; a required block was declared by the engine");
         asAiRun(() -> super.declareBlockers(defender, combat));
     }
 

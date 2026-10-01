@@ -53,7 +53,7 @@ export interface EventConfig {
   knowledge: KnowledgeTier;
   promptVersion: string;         // folder under prompts/ (e.g. "v1")
   maxToolCallsPerDecision: number;
-  maxRetries: number;            // re-asks after an invalid answer before falling back
+  maxRetries: number;            // re-asks after a failed answer before the decision is forfeited (null action)
   decisionTimeoutSec: number;
   carryNotes: boolean;           // let agents keep a scratchpad across decisions
   maxGameTurns: number;          // turn cap -> draw
@@ -97,7 +97,7 @@ export interface BenchConfig {
 
 const EVENT_DEFAULTS: Omit<EventConfig, "name" | "cube"> = {
   pods: 1, seed: 1, packs: 3, packSize: 15, format: "round-robin", rounds: 3, gamesPerMatch: 3, minDeckSize: 40,
-  knowledge: "oracle+tools", promptVersion: "v1", maxToolCallsPerDecision: 6, maxRetries: 2,
+  knowledge: "oracle+tools", promptVersion: "v1", maxToolCallsPerDecision: 6, maxRetries: 3,
   decisionTimeoutSec: 180, carryNotes: true, maxGameTurns: 40, recordPrompts: false, rotateSeats: true,
   cubeStudy: true, briefMaxWords: 1000, briefScope: "all", parallelMatches: 4, priorityStops: "smart", manaPayment: "smart",
 };

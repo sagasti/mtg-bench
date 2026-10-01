@@ -61,6 +61,8 @@ export class AnthropicProvider implements Provider {
         cacheReadTokens: u.cache_read_input_tokens ?? 0,
         cacheWriteTokens: u.cache_creation_input_tokens ?? 0,
         reasoningTokens: 0, // Anthropic bills thinking inside output_tokens and does not split it out
+        reportedCostUsd: 0, // the Messages API reports tokens, not cost
+        costReportedCalls: 0,
       },
       stopReason: json.stop_reason,
       httpStatus: status,

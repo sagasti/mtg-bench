@@ -15,6 +15,8 @@ export interface ModelTurn {
   usage: TokenUsage;
   stopReason?: string;
   httpStatus?: number;
+  /** Upstream host that served the call, when a gateway reports it. */
+  servedBy?: string;
   /** Provider-native assistant message, replayed verbatim on the next turn (keeps thinking signatures etc). */
   raw?: unknown;
 }

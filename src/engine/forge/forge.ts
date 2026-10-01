@@ -12,6 +12,7 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import readline from "node:readline";
+import { InfraError } from "../../agents/agent.ts";
 import type { EngineConfig } from "../../config.ts";
 import type { DecisionKind, DecisionRequest } from "../../types.ts";
 import { debug } from "../../util/log.ts";
@@ -53,6 +54,7 @@ export class ForgeEngine implements GameEngine {
     const token = crypto.randomBytes(16).toString("hex");
     const games: GameResult[] = [];
     const delegations: Delegation[] = [];
+    const forfeits: Delegation[] = [];
     const decisions: [number, number] = [0, 0];
     let current: { game: number; onThePlay: 0 | 1; t0: number } | null = null;
     const logDir = path.join(spec.runDir, "forge-logs");
@@ -72,7 +74,7 @@ export class ForgeEngine implements GameEngine {
         try { fs.closeSync(logFile); } catch { /* ignore */ }
         const w0 = games.filter((g) => g.winner === 0).length, w1 = games.filter((g) => g.winner === 1).length;
         resolve({ matchId: spec.matchId, pod: spec.pod, round: spec.round, seats: [spec.seats[0].id, spec.seats[1].id], games,
-          winner: w0 > w1 ? 0 : w1 > w0 ? 1 : null, delegations, error });
+          winner: w0 > w1 ? 0 : w1 > w0 ? 1 : null, delegations, forfeits, error });
       };
       const timer = setTimeout(() => finish(`match timeout after ${this.cfg.matchTimeoutSec ?? 7200}s`), (this.cfg.matchTimeoutSec ?? 7200) * 1000);
 
@@ -102,13 +104,20 @@ export class ForgeEngine implements GameEngine {
               };
               try {
                 const res = await spec.seats[seatIdx].decide(req, { pod: spec.pod, matchId: spec.matchId, game: msg.game ?? current?.game });
-                send({ type: "answer", rid: msg.rid, choice: res.choice });
+                send({ type: "answer", rid: msg.rid, choice: res.choice, ...(res.forfeit ? { forfeit: true } : {}) });
               } catch (e: any) {
-                send({ type: "answer", rid: msg.rid, choice: [], error: String(e?.message ?? e) });
+                // Provider outage or harness bug: abandon the match rather than play it on the agent's behalf.
+                finish(`${e instanceof InfraError ? "infrastructure error" : "harness error"}: ${e?.message ?? e}`);
               }
               break;
             }
             case "game_end":
+              if (Array.isArray(msg.log)) {
+                const dir = path.join(spec.runDir, "games");
+                fs.mkdirSync(dir, { recursive: true });
+                fs.writeFileSync(path.join(dir, `${spec.matchId}-g${msg.game}.log`),
+                  `# ${spec.matchId} game ${msg.game}: P1 = ${spec.seats[0].id}, P2 = ${spec.seats[1].id}\n` + msg.log.join("\n") + "\n");
+              }
               games.push({
                 game: msg.game, winner: msg.winner ?? null, onThePlay: msg.onThePlay ?? current?.onThePlay ?? 0, turns: msg.turns ?? 0,
                 reason: msg.reason ?? "unknown", decisions: [...decisions] as [number, number], durationMs: current ? Date.now() - current.t0 : 0,
@@ -116,6 +125,9 @@ export class ForgeEngine implements GameEngine {
               break;
             case "delegated":
               delegations.push({ seat: msg.seat, game: msg.game, what: msg.what, reason: msg.reason });
+              break;
+            case "forfeit":
+              forfeits.push({ seat: msg.seat, game: msg.game, what: msg.what, reason: msg.reason });
               break;
             case "match_end": finish(); break;
             case "error": fs.writeSync(logFile, `[bridge error] ${msg.msg}\n`); break;
@@ -137,7 +149,7 @@ export class ForgeEngine implements GameEngine {
           "--deck0", path.resolve(spec.deckFiles[0]), "--deck1", path.resolve(spec.deckFiles[1]),
           "--external0", String(!spec.seats[0].usesForgeAi), "--external1", String(!spec.seats[1].usesForgeAi),
           "--games", String(spec.gamesPerMatch), "--seed", String(spec.seed), "--max-turns", String(spec.maxGameTurns),
-          "--stops", spec.priorityStops, "--mana", spec.manaPayment,
+          "--stops", spec.priorityStops, "--mana", spec.manaPayment, "--max-retries", String(spec.maxRetries),
         ];
         fs.writeSync(logFile, `$ ${this.cfg.java ?? "java"} ${args.join(" ")}\n(cwd ${cwd})\n`);
         child = spawn(this.cfg.java ?? "java", args, { cwd, stdio: ["ignore", logFile, logFile] });

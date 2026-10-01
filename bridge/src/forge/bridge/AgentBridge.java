@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
 import forge.GuiDesktop;
@@ -16,6 +17,7 @@ import forge.deck.Deck;
 import forge.deck.io.DeckSerializer;
 import forge.game.Game;
 import forge.game.GameEndReason;
+import forge.game.GameLogEntry;
 import forge.game.GameOutcome;
 import forge.game.GameRules;
 import forge.game.GameType;
@@ -50,7 +52,8 @@ public final class AgentBridge {
             long seed = Long.parseLong(a.getOrDefault("seed", "1"));
             MyRandom.setRandom(new Random(seed));
             int games = Integer.parseInt(a.getOrDefault("games", "3"));
-            MatchContext ctx = new MatchContext(Integer.parseInt(a.getOrDefault("max-turns", "40")), !"all".equals(a.get("stops")), "always".equals(a.get("mana")));
+            MatchContext ctx = new MatchContext(Integer.parseInt(a.getOrDefault("max-turns", "40")), !"all".equals(a.get("stops")), "always".equals(a.get("mana")),
+                    Integer.parseInt(a.getOrDefault("max-retries", "3")));
 
             GameRules rules = new GameRules(GameType.Draft);
             rules.setAppliedVariants(EnumSet.of(GameType.Draft));
@@ -99,6 +102,10 @@ public final class AgentBridge {
                 if (starter != null) end.addProperty("onThePlay", starter.getLobbyPlayer().equals(lobby[0]) ? 0 : 1);
                 end.addProperty("turns", out != null ? out.getLastTurnNumber() : game.getPhaseHandler().getTurn());
                 end.addProperty("reason", error != null ? "error: " + error : out != null ? String.valueOf(out.getWinCondition()) : "unknown");
+                // Full Forge game log, chronological, for offline review. The harness writes it to a file; it never reaches agents.
+                JsonArray log = new JsonArray();
+                for (GameLogEntry e : game.getGameLog().getAllEntries()) log.add(e.type() + ": " + e.message());
+                end.add("log", log);
                 client.send(end);
             }
             JsonObject done = new JsonObject();

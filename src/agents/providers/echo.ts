@@ -13,7 +13,7 @@ export class EchoProvider implements Provider {
   readonly model: string;
   private rng: Rng;
   private n = 0;
-  constructor(seat: SeatConfig) {
+  constructor(private seat: SeatConfig) {
     this.model = seat.model ?? "echo";
     this.rng = new Rng([...seat.id].reduce((a, c) => a * 31 + c.charCodeAt(0), 7));
   }
@@ -35,8 +35,10 @@ export class EchoProvider implements Provider {
     } else {
       const ids = debug?.optionIds ?? [];
       const min = debug?.min ?? 1, max = debug?.max ?? 1;
-      // Occasionally answer illegally to exercise the retry path.
-      const bad = this.rng.next() < 0.03 && last.role !== "tool";
+      // Occasionally answer illegally to exercise the retry path. Test knob: extraBody.invalidRate (0-1) applies to
+      // retries too, so a high rate drives decisions all the way to a forfeit.
+      const rate = Number(this.seat.extraBody?.invalidRate);
+      const bad = Number.isFinite(rate) ? this.rng.next() < rate : this.rng.next() < 0.03 && last.role !== "tool";
       const k = Math.min(ids.length, min + this.rng.int(Math.max(1, Math.min(max, ids.length) - min + 1)));
       const choice = bad ? ["not-an-option"] : this.rng.shuffle([...ids]).slice(0, k);
       const input: any = { choice, rationale: "echo" };
@@ -47,7 +49,7 @@ export class EchoProvider implements Provider {
     return {
       text: "",
       toolCalls,
-      usage: { inputTokens: Math.round(promptChars / 4), outputTokens: Math.round(out.length / 4) + 20, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 },
+      usage: { inputTokens: Math.round(promptChars / 4), outputTokens: Math.round(out.length / 4) + 20, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, reportedCostUsd: 0, costReportedCalls: 0 },
       stopReason: "tool_use",
     };
   }

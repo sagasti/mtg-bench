@@ -5,6 +5,7 @@
  *   cubes --forge-res <dir>               list cubes bundled with Forge and their sizes
  *   check <config.yaml> [--ping]          validate config, keys, card data, cube, engine, rules file
  *   run <config.yaml> [--engine mock|forge] [--pods N] [--run-id ID] [--forge-res DIR]
+ *   match <config.yaml> --seats A,B --decks a.dck,b.dck [--matches N] [--parallel N] [--run-id ID]   head-to-head with fixed decks, no draft
  *   report <runDir...>                    (re)build report.md for one run, or a merged report for several
  *   rate <runDir...> [--level game|match] [--anchor seat=1500]
  */
@@ -22,6 +23,7 @@ import { SUBMIT_TOOL } from "./knowledge/tools.ts";
 import { loadRules } from "./knowledge/rules.ts";
 import { rate } from "./rating/bt.ts";
 import { outcomesFromMatches } from "./rating/outcomes.ts";
+import { runHeadToHead } from "./tournament/match.ts";
 import { runEvent } from "./tournament/run.ts";
 import { info, loadDotEnv, readJsonl, setVerbose } from "./util/log.ts";
 
@@ -116,6 +118,27 @@ async function main() {
       console.log("\nRatings:");
       for (const r of ratings) console.log(`  ${r.id.padEnd(22)} ${r.rating.toFixed(0).padStart(5)}  [${r.lo.toFixed(0)}–${r.hi.toFixed(0)}]  ${r.score.toFixed(1)}/${r.games}`);
       console.log(`\nReport: ${path.join(runDir, "report.md")}`);
+      return;
+    }
+    case "match": {
+      const cfg = loadConfig(positional(args)[0]);
+      if (flag(args, "forge-res")) cfg.forgeRes = path.resolve(flag(args, "forge-res")!);
+      const seatIds = (flag(args, "seats") ?? "").split(",").filter(Boolean);
+      const deckFiles = (flag(args, "decks") ?? "").split(",").filter(Boolean);
+      if (seatIds.length !== 2 || deckFiles.length !== 2) throw new Error("usage: match <config.yaml> --seats A,B --decks a.dck,b.dck [--matches N] [--parallel N] [--run-id ID]");
+      const seatCfgs = cfg.seats.filter((s) => seatIds.includes(s.id));
+      const miss = missingKeys({ ...cfg, seats: seatCfgs });
+      if (miss.length) throw new Error("missing API keys:\n  " + miss.join("\n  "));
+      const engineType = (flag(args, "engine") ?? cfg.engine.type) as "mock" | "forge";
+      const engine = engineType === "forge" ? new ForgeEngine(cfg.engine) : new MockEngine(loadDb());
+      const { runDir, results } = await runHeadToHead(cfg, engine, {
+        seats: [seatIds[0], seatIds[1]], deckFiles: [path.resolve(deckFiles[0]), path.resolve(deckFiles[1])],
+        matches: Number(flag(args, "matches") ?? 1), parallel: flag(args, "parallel") ? Number(flag(args, "parallel")) : undefined, runId: flag(args, "run-id"),
+      });
+      const w = [0, 0, 0];
+      for (const r of results) for (const g of r.games) w[g.winner === 0 ? 0 : g.winner === 1 ? 1 : 2]++;
+      console.log(`\nGames: ${seatIds[0]} ${w[0]} – ${w[1]} ${seatIds[1]}${w[2] ? ` (${w[2]} drawn)` : ""}`);
+      console.log(`Report: ${path.join(runDir, "report.md")}`);
       return;
     }
     case "report": {

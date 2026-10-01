@@ -17,9 +17,10 @@ interface Agg {
   decisions: number; autoResolved: number; modelCalls: number; apiErrors: number;
   inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; reasoningTokens: number;
   invalidAttempts: number; fallbacks: number; latencies: number[]; tools: Record<string, number>; cost: number | null;
+  reportedCost: number; costReportedCalls: number; forfeits: number;
 }
 const newAgg = (): Agg => ({ decisions: 0, autoResolved: 0, modelCalls: 0, apiErrors: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0,
-  cacheWriteTokens: 0, reasoningTokens: 0, invalidAttempts: 0, fallbacks: 0, latencies: [], tools: {}, cost: 0 });
+  cacheWriteTokens: 0, reasoningTokens: 0, invalidAttempts: 0, fallbacks: 0, latencies: [], tools: {}, cost: 0, reportedCost: 0, costReportedCalls: 0, forfeits: 0 });
 
 export function costOf(r: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }, p?: Pricing): number | null {
   if (!p) return null;
@@ -33,9 +34,10 @@ function addDecision(a: Agg, d: DecisionRecord, pricing: Record<string, Pricing>
   a.modelCalls += d.modelCalls;
   a.inputTokens += d.inputTokens; a.outputTokens += d.outputTokens;
   a.cacheReadTokens += d.cacheReadTokens; a.cacheWriteTokens += d.cacheWriteTokens; a.reasoningTokens += d.reasoningTokens;
-  a.invalidAttempts += d.invalidAttempts; if (d.fallback) a.fallbacks++;
+  a.invalidAttempts += d.invalidAttempts; if (d.fallback) a.fallbacks++; if (d.forfeit) a.forfeits++;
   if (d.modelCalls > 0) a.latencies.push(d.latencyMs);
   for (const [k, v] of Object.entries(d.toolCalls ?? {})) a.tools[k] = (a.tools[k] ?? 0) + v;
+  a.reportedCost += d.reportedCostUsd ?? 0; a.costReportedCalls += d.costReportedCalls ?? 0;
   const c = costOf(d, pricing[d.model]);
   a.cost = a.cost === null || c === null ? (d.modelCalls ? null : a.cost) : a.cost + c;
 }
@@ -43,6 +45,8 @@ function addDecision(a: Agg, d: DecisionRecord, pricing: Record<string, Pricing>
 const pct = (xs: number[], q: number) => { if (!xs.length) return 0; const s = [...xs].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(q * s.length))]; };
 const k = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : `${n}`);
 const usd = (n: number | null) => (n === null ? "n/a" : `$${n.toFixed(n < 1 ? 4 : 2)}`);
+/** Provider-reported cost, marked when only some calls reported one. */
+const reported = (a: Agg) => (a.costReportedCalls === 0 ? "n/a" : `${usd(a.reportedCost)}${a.costReportedCalls < a.modelCalls ? ` (${a.costReportedCalls}/${a.modelCalls} calls)` : ""}`);
 
 export function summarize(runDirs: string[], cfg?: BenchConfig) {
   const decisions: DecisionRecord[] = runDirs.flatMap((d) => readJsonl(path.join(d, "decisions.jsonl")));
@@ -77,6 +81,16 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
   const decided = games.filter((g) => g.winner !== null);
   const playWins = decided.filter((g) => g.winner === g.onThePlay).length;
 
+  // Decisions the agent forfeited: harness forfeits (answers kept failing validation) plus bridge forfeits
+  // (answers kept failing in-game, e.g. lands that can't pay). Counted against the agent.
+  const forfeited = new Map<string, Map<string, number>>();
+  const bump = (seat: string, key: string) => {
+    if (!forfeited.has(seat)) forfeited.set(seat, new Map());
+    forfeited.get(seat)!.set(key, (forfeited.get(seat)!.get(key) ?? 0) + 1);
+  };
+  for (const d of decisions) if (d.forfeit) bump(d.seat, `${d.kind} (no valid answer)`);
+  for (const m of matches) for (const f of m.forfeits ?? []) bump(m.seats[f.seat], `${f.what} (${f.reason.replace(/ in \d+ attempts.*/, "")})`);
+
   // Decisions Forge's AI made on an agent's behalf (Forge engine only)
   const delegated = new Map<string, Map<string, number>>();
   for (const m of matches) for (const d of m.delegations ?? []) {
@@ -86,7 +100,7 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
     delegated.get(seat)!.set(key, (delegated.get(seat)!.get(key) ?? 0) + 1);
   }
 
-  return { decisions, calls, matches, bySeat, bySeatPhase, byKind, ratings, games, reasons, delegated, playWinRate: decided.length ? playWins / decided.length : null, pricing };
+  return { decisions, calls, matches, bySeat, bySeatPhase, byKind, ratings, games, reasons, delegated, forfeited, playWinRate: decided.length ? playWins / decided.length : null, pricing };
 }
 
 export function renderReport(s: ReturnType<typeof summarize>, title: string): string {
@@ -100,14 +114,25 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
   L.push("");
 
   L.push("## Token usage and cost by seat", "");
-  L.push("| Seat | Model | Decisions (auto) | Calls | Input | Cache read | Cache write | Output | Reasoning | Tokens/decision | Cost | p50 / p95 latency |",
-    "|---|---|---|---|---|---|---|---|---|---|---|---|");
+  L.push("| Seat | Model | Decisions (auto) | Calls | Input | Cache read | Cache write | Output | Reasoning | Tokens/decision | Cost (computed) | Cost (reported) | p50 / p95 latency |",
+    "|---|---|---|---|---|---|---|---|---|---|---|---|---|");
   for (const [seat, a] of [...s.bySeat.entries()].sort()) {
     const tot = a.inputTokens + a.outputTokens + a.cacheReadTokens + a.cacheWriteTokens;
-    L.push(`| ${seat} | ${a.model} | ${a.decisions} (${a.autoResolved}) | ${a.modelCalls} | ${k(a.inputTokens)} | ${k(a.cacheReadTokens)} | ${k(a.cacheWriteTokens)} | ${k(a.outputTokens)} | ${k(a.reasoningTokens)} | ${a.decisions ? k(Math.round(tot / a.decisions)) : "–"} | ${usd(a.cost)} | ${(pct(a.latencies, 0.5) / 1000).toFixed(1)}s / ${(pct(a.latencies, 0.95) / 1000).toFixed(1)}s |`);
+    L.push(`| ${seat} | ${a.model} | ${a.decisions} (${a.autoResolved}) | ${a.modelCalls} | ${k(a.inputTokens)} | ${k(a.cacheReadTokens)} | ${k(a.cacheWriteTokens)} | ${k(a.outputTokens)} | ${k(a.reasoningTokens)} | ${a.decisions ? k(Math.round(tot / a.decisions)) : "–"} | ${usd(a.cost)} | ${reported(a)} | ${(pct(a.latencies, 0.5) / 1000).toFixed(1)}s / ${(pct(a.latencies, 0.95) / 1000).toFixed(1)}s |`);
   }
   const totalCost = [...s.bySeat.values()].reduce<number | null>((t, a) => (t === null || a.cost === null ? (a.modelCalls ? null : t) : t + a.cost), 0);
-  L.push("", `Total cost: ${usd(totalCost)}${totalCost === null ? " (add `pricing` for every model in the config to get costs)" : ""}`, "");
+  const totalReported = [...s.bySeat.values()].reduce((t, a) => t + a.reportedCost, 0);
+  const anyReported = [...s.bySeat.values()].some((a) => a.costReportedCalls > 0);
+  L.push("", `Total cost: computed ${usd(totalCost)}${totalCost === null ? " (add `pricing` for every model in the config to get costs)" : ""}`
+    + (anyReported ? ` · reported by provider ${usd(totalReported)}` : ""), "",
+    "Computed cost is tokens × the config's `pricing`. Reported cost is what the provider says it charged (OpenRouter returns it per call); when they differ, trust the reported figure and fix `pricing` or pin the host.", "");
+  const hosts = new Map<string, Map<string, number>>();
+  for (const c of s.calls) if (c.servedBy) {
+    const m = hosts.get(c.seat) ?? new Map<string, number>(); m.set(c.servedBy, (m.get(c.servedBy) ?? 0) + 1); hosts.set(c.seat, m);
+  }
+  if (hosts.size) {
+    L.push("Hosts that served each seat (calls): " + [...hosts.entries()].map(([seat, m]) => `${seat}: ${[...m.entries()].map(([h, n]) => `${h} ${n}`).join(", ")}`).join("; "), "");
+  }
 
   L.push("## Tokens and cost by seat × phase", "");
   L.push("| Seat | Phase | Decisions | Input+cache | Output | Cost |", "|---|---|---|---|---|---|");
@@ -127,17 +152,31 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
   L.push("");
 
   L.push("## Reliability and tool use by seat", "");
-  L.push("| Seat | Invalid answers | Fallbacks (rate) | API errors | Tool calls |", "|---|---|---|---|---|");
+  L.push("| Seat | Invalid answers | Forfeits (rate) | Fallbacks (rate) | API errors | Tool calls |", "|---|---|---|---|---|---|");
   for (const [seat, a] of [...s.bySeat.entries()].sort()) {
     const tools = Object.entries(a.tools).filter(([n]) => n !== "submit_decision" && n !== "submit_brief").map(([n, v]) => `${n}: ${v}`).join(", ") || "–";
-    L.push(`| ${seat} | ${a.invalidAttempts} | ${a.fallbacks} (${a.decisions ? ((100 * a.fallbacks) / a.decisions).toFixed(1) : 0}%) | ${a.apiErrors} | ${tools} |`);
+    const rate = (n: number) => `${n} (${a.decisions ? ((100 * n) / a.decisions).toFixed(1) : 0}%)`;
+    L.push(`| ${seat} | ${a.invalidAttempts} | ${rate(a.forfeits)} | ${rate(a.fallbacks)} | ${a.apiErrors} | ${tools} |`);
   }
   L.push("");
+
+  L.push("## Forfeited decisions", "");
+  if (!s.forfeited.size) L.push("None.", "");
+  else {
+    L.push(`The agent's answers kept failing (after \`maxRetries\` re-asks), so it got the null action: pass, decline, no attack/block, the first legal option, or a cancelled cast. This measures the agent and counts against it.`, "");
+    L.push("| Seat | Forfeited | Most common |", "|---|---|---|");
+    for (const [seat, m] of [...s.forfeited.entries()].sort()) {
+      const total = [...m.values()].reduce((a, b) => a + b, 0);
+      const top = [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => `${k}: ${v}`).join("; ");
+      L.push(`| ${seat} | ${total} | ${top} |`);
+    }
+    L.push("");
+  }
 
   L.push("## Decisions made by Forge AI on an agent's behalf", "");
   if (!s.delegated.size) L.push("None recorded (or not a Forge run).", "");
   else {
-    L.push("A high share means the rating partly reflects Forge's AI rather than the agent. Harness fallbacks (rank-bot) are counted separately above.", "");
+    L.push("Decision types the bridge doesn't offer to agents yet, so Forge's AI decides. A high share means the rating partly reflects Forge's AI; these are gaps in the harness, not the agent's mistakes.", "");
     L.push("| Seat | Delegated | Share of game decisions | Most common |", "|---|---|---|---|");
     for (const [seat, m] of [...s.delegated.entries()].sort()) {
       const total = [...m.values()].reduce((a, b) => a + b, 0);
@@ -166,6 +205,7 @@ export function writeReport(runDir: string, cfg?: BenchConfig) {
     seats: Object.fromEntries([...s.bySeat.entries()].map(([id, a]) => [id, { ...a, latencies: undefined, p50LatencyMs: pct(a.latencies, 0.5), p95LatencyMs: pct(a.latencies, 0.95) }])),
     games: s.games.length, reasons: s.reasons, playWinRate: s.playWinRate,
     delegated: Object.fromEntries([...s.delegated.entries()].map(([k, m]) => [k, Object.fromEntries(m)])),
+    forfeited: Object.fromEntries([...s.forfeited.entries()].map(([k, m]) => [k, Object.fromEntries(m)])),
   };
   fs.writeFileSync(path.join(runDir, "summary.json"), JSON.stringify(json, null, 2));
 }

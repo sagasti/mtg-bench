@@ -73,6 +73,8 @@ export interface DecisionResponse {
   notes?: string;
   /** Optional short rationale, logged for analysis (never shown to opponents). */
   rationale?: string;
+  /** Set by the harness: the agent failed this decision and this is the null action standing in for it. */
+  forfeit?: boolean;
 }
 
 /** Everything an agent is told about who it is in this event. */

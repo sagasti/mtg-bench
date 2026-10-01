@@ -22,6 +22,8 @@ export interface MatchSpec {
   priorityStops: "smart" | "all";
   /** smart = ask which lands to tap only when it can matter; always = every mana payment. */
   manaPayment: "smart" | "always";
+  /** Re-asks after a failed answer before the decision is forfeited (event.maxRetries). */
+  maxRetries: number;
 }
 
 /** A decision Forge's AI made on an agent's behalf (answer missing/illegal, or a rare decision type). */
@@ -45,6 +47,8 @@ export interface MatchResult {
   games: GameResult[];
   winner: 0 | 1 | null;
   delegations?: Delegation[];
+  /** Decisions the bridge forfeited after the agent's answers kept failing in-game (e.g. lands that can't pay). */
+  forfeits?: Delegation[];
   error?: string;
 }
 

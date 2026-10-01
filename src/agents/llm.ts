@@ -48,21 +48,28 @@ export class LlmAgent implements DecisionAgent {
     const maxRounds = this.event.maxToolCallsPerDecision + this.event.maxRetries + 3;
 
     for (let round = 0; round < maxRounds; round++) {
-      const t0 = Date.now();
       let turn;
-      try {
-        turn = await this.provider.complete({
-          system, messages, tools, signal,
-          debug: { optionIds: req.options.map((o) => o.id), min: req.min, max: req.max, kind: req.kind },
-        });
-      } catch (e: any) {
-        lastError = String(e?.message ?? e);
-        onCall({ turn: round, latencyMs: Date.now() - t0, usage: ZERO_USAGE, error: lastError, httpStatus: e?.status, toolCallsRequested: 0 });
-        break;
+      let t0 = Date.now();
+      for (let attempt = 0; ; attempt++) {
+        t0 = Date.now();
+        try {
+          turn = await this.provider.complete({
+            system, messages, tools, signal,
+            debug: { optionIds: req.options.map((o) => o.id), min: req.min, max: req.max, kind: req.kind },
+          });
+          break;
+        } catch (e: any) {
+          lastError = String(e?.message ?? e);
+          onCall({ turn: round, latencyMs: Date.now() - t0, usage: ZERO_USAGE, error: lastError, httpStatus: e?.status, toolCallsRequested: 0 });
+          if (signal.aborted || attempt >= API_RETRIES || !retryable(e)) {
+            return { response: null, usage, modelCalls, toolCalls, invalidAttempts, error: lastError, infraError: true };
+          }
+          await sleep(API_BACKOFF_MS * 3 ** attempt, signal);
+        }
       }
       modelCalls++;
       usage = addUsage(usage, turn.usage);
-      onCall({ turn: round, latencyMs: Date.now() - t0, usage: turn.usage, stopReason: turn.stopReason, httpStatus: turn.httpStatus, toolCallsRequested: turn.toolCalls.length });
+      onCall({ turn: round, latencyMs: Date.now() - t0, usage: turn.usage, stopReason: turn.stopReason, httpStatus: turn.httpStatus, toolCallsRequested: turn.toolCalls.length, servedBy: turn.servedBy });
       messages.push({ role: "assistant", text: turn.text, toolCalls: turn.toolCalls, raw: turn.raw });
 
       if (turn.toolCalls.length === 0) {
@@ -118,6 +125,20 @@ export class LlmAgent implements DecisionAgent {
   }
 }
 
+/** Provider failures (rate limits, 5xx, network) are retried with backoff; anything else is not the agent's fault either. */
+const API_RETRIES = 3;
+const API_BACKOFF_MS = 2000;
+function retryable(e: any): boolean {
+  const s = e?.status;
+  return s === undefined || s === 408 || s === 409 || s === 429 || s >= 500;
+}
+function sleep(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve) => {
+    const t = setTimeout(resolve, ms);
+    signal.addEventListener("abort", () => { clearTimeout(t); resolve(); }, { once: true });
+  });
+}
+
 /** Hard guard: the cube / event name must never reach an agent. */
 export function assertNoLeak(text: string, secrets: string[]) {
   const lower = text.toLowerCase();
@@ -159,7 +180,7 @@ export async function runCubeStudy(
     }
     modelCalls++;
     usage = addUsage(usage, turn.usage);
-    onCall({ turn: round, latencyMs: Date.now() - t0, usage: turn.usage, stopReason: turn.stopReason, httpStatus: turn.httpStatus, toolCallsRequested: turn.toolCalls.length });
+    onCall({ turn: round, latencyMs: Date.now() - t0, usage: turn.usage, stopReason: turn.stopReason, httpStatus: turn.httpStatus, toolCallsRequested: turn.toolCalls.length, servedBy: turn.servedBy });
     messages.push({ role: "assistant", text: turn.text, toolCalls: turn.toolCalls, raw: turn.raw });
     if (!turn.toolCalls.length) {
       if (turn.text.trim().length > 200) return { brief: capWords(turn.text, event.briefMaxWords), usage, modelCalls, toolCalls };
