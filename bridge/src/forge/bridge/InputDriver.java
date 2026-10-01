@@ -153,11 +153,14 @@ final class InputDriver implements Observer, Runnable {
             // Forge activates a mana source asynchronously (on a game executor thread); wait for it like a human would
             // before the next click, or two activations touch the cost-payment stack at once.
             long activationDeadline = System.currentTimeMillis() + 30_000;
-            while (in instanceof InputPayMana pm && pm.isActivatingManaAbility() && current(in)) {
+            boolean heldOpen = false;
+            while (in instanceof InputPayMana pm && (pm.isActivatingManaAbility() || manaTask() > 0) && current(in)) {
+                if (!pm.isActivatingManaAbility() && !heldOpen) { heldOpen = true; System.err.println("[driver " + ch.seat + "] payment unlocked while its activation still runs: waiting"); }
+                if (manaTask() == 2) activationDeadline = System.currentTimeMillis() + 30_000; // the agent is answering
                 if (System.currentTimeMillis() > activationDeadline) {
                     // Never hang silently: a mana activation that doesn't finish ends the match as an error.
                     ch.client.error("input driver: mana activation still running after 30 s; prompt=" + StateView.clean(gui.prompt).replace('\n', ' '));
-                    System.err.flush();
+                    dumpThreads();
                     System.exit(3);
                 }
                 Thread.sleep(5);
@@ -174,7 +177,7 @@ final class InputDriver implements Observer, Runnable {
             // Never hang silently: an input the driver can't complete ends the match as an error, visible in the report.
             ch.client.error("input driver: gave up on " + in.getClass().getSimpleName() + " after " + MAX_CLICKS_PER_INPUT + " steps; prompt="
                     + StateView.clean(gui.prompt).replace('\n', ' ') + " ok=" + gui.okEnabled + " cancel=" + gui.cancelEnabled + " choices=" + validChoices(in));
-            System.err.flush();
+            dumpThreads();
             System.exit(3);
         }
     }
@@ -204,6 +207,41 @@ final class InputDriver implements Observer, Runnable {
         } catch (ReflectiveOperationException | RuntimeException e) {
             return null;
         }
+    }
+
+    /**
+     * 1 while one of Forge's payment tasks (InputPayMana's activation or Auto, run on a game pool thread) is still
+     * working rather than parked on an input. Forge clears the payment's lock when the payment is re-shown after a
+     * nested input closes (Prophetic Prism's {1}), before the activation that opened it has finished; acting then runs
+     * two controller swaps at once, and Forge's controller map isn't thread-safe. 2 while that task is waiting for the
+     * agent (a colour choice), 0 when none is running.
+     */
+    private static int manaTask() {
+        Thread self = Thread.currentThread();
+        int state = 0;
+        for (java.util.Map.Entry<Thread, StackTraceElement[]> e : Thread.getAllStackTraces().entrySet()) {
+            if (e.getKey() == self) continue;
+            boolean asking = false;
+            for (StackTraceElement el : e.getValue()) {
+                if (el.getClassName().startsWith("forge.gamemodes.match.input.InputSyncronizedBase")
+                        && el.getMethodName().equals("awaitLatchRelease")) break; // parked on an input: the driver must act
+                if (el.getClassName().equals(AgentChannel.class.getName())) asking = true;
+                if (el.getClassName().equals("forge.gamemodes.match.input.InputPayMana")
+                        && el.getMethodName().startsWith("lambda$")) { state = Math.max(state, asking ? 2 : 1); break; }
+            }
+        }
+        return state;
+    }
+
+    /** Before aborting a match: every thread's stack to the match log, so the stall can be diagnosed afterwards. */
+    private static void dumpThreads() {
+        StringBuilder sb = new StringBuilder("=== thread dump at abort ===\n");
+        for (java.util.Map.Entry<Thread, StackTraceElement[]> e : Thread.getAllStackTraces().entrySet()) {
+            sb.append('"').append(e.getKey().getName()).append("\" ").append(e.getKey().getState()).append('\n');
+            for (StackTraceElement el : e.getValue()) sb.append("    at ").append(el).append('\n');
+        }
+        System.err.println(sb);
+        System.err.flush();
     }
 
     /** The input's own list of valid choices, for diagnostics (reflection: private field). */
