@@ -31,6 +31,7 @@ import forge.card.MagicColor;
 import forge.card.mana.ManaCost;
 import forge.card.mana.ManaCostShard;
 import forge.game.Game;
+import forge.game.GameActionUtil;
 import forge.game.GameEndReason;
 import forge.game.GameEntity;
 import forge.game.GameObject;
@@ -91,6 +92,9 @@ public class PlayerControllerExternal extends PlayerControllerAi {
     private SpellAbility agentChosen;
     /** > 0 while Forge's AI is deciding on our behalf; nested choices then stay with the AI. */
     private int aiDepth = 0;
+    /** Casts that rolled back, withheld from priority until the game state changes, so a bot can't re-pick them forever. */
+    private final Set<String> failedCasts = new HashSet<>();
+    private String failedCastsKey = "";
 
     public PlayerControllerExternal(Game game, Player p, LobbyPlayer lp, BridgeClient client, MatchContext ctx, int seat) {
         super(game, p, lp);
@@ -339,8 +343,20 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         if (ai()) return super.chooseSpellAbilityToPlay();
         if (!shouldStop()) return null;
         Game g = getGame();
+        String stateKey = priorityStateKey(g);
+        if (!stateKey.equals(failedCastsKey)) {
+            failedCasts.clear();
+            failedCastsKey = stateKey;
+        }
         CardCollection cards = ComputerUtilCard.dedupeCards(ComputerUtilAbility.getAvailableCards(g, player));
-        List<SpellAbility> all = ComputerUtilAbility.getOriginalAndAltCostAbilities(ComputerUtilAbility.getSpellAbilities(cards, player), player);
+        // Like the human UI: each ability plus its alternative costs (flashback, evoke, ...). Additional and optional
+        // costs (kicker, buyback, ...) are chosen during casting by PlaySpellAbility, so they must not be pre-applied here.
+        List<SpellAbility> all = new ArrayList<>();
+        for (SpellAbility sa : ComputerUtilAbility.getSpellAbilities(cards, player)) {
+            sa.setActivatingPlayer(player);
+            all.add(sa);
+            all.addAll(GameActionUtil.getAlternativeCosts(sa, player, false));
+        }
         Map<String, SpellAbility> byId = new LinkedHashMap<>();
         List<Opt> opts = new ArrayList<>();
         JsonObject passMeta = new JsonObject(); passMeta.addProperty("type", "pass");
@@ -358,7 +374,9 @@ public class PlayerControllerExternal extends PlayerControllerAi {
                     label = "Play land " + host.getName();
                     meta.addProperty("type", "land");
                 } else {
+                    if (failedCasts.contains(castKey(sa))) continue;
                     if (!ComputerUtilCost.canPayCost(sa, player, false)) continue;
+                    if (!hasRequiredTargets(sa)) continue;
                     String cost = sa.getPayCosts() != null ? sa.getPayCosts().toSimpleString() : "";
                     if (sa.isSpell()) {
                         label = "Cast " + host.getName() + (cost.isEmpty() ? "" : " (" + cost + ")");
@@ -405,8 +423,34 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         // Generic casting path: asks this controller for optional costs, X, modes, targets, cost choices and mana.
         if (!PlaySpellAbility.playSpellAbility(this, player, sa)) {
             client.log("cast of " + describe(sa) + " was cancelled or could not be paid; rolled back");
+            failedCasts.add(castKey(sa));
         }
         return true;
+    }
+
+    /** Stable identity for a cast option: Forge builds fresh SpellAbility objects for alternative costs on every call. */
+    private static String castKey(SpellAbility sa) {
+        Card host = sa.getHostCard();
+        return (host != null ? host.getId() : -1) + "|" + sa.getDescription() + "|" + (sa.getPayCosts() != null ? sa.getPayCosts().toSimpleString() : "");
+    }
+
+    /** Every ability in the chain that must target has at least one legal candidate (Forge's human UI cancels the cast otherwise). */
+    private static boolean hasRequiredTargets(SpellAbility sa) {
+        for (SpellAbility s = sa; s != null; s = s.getSubAbility()) {
+            if (!s.usesTargeting()) continue;
+            TargetRestrictions tgt = s.getTargetRestrictions();
+            if (s.getMinTargets() > 0 && !tgt.hasCandidates(s)) return false;
+        }
+        return true;
+    }
+
+    /** Changes whenever anything that could make a rolled-back cast succeed changes. */
+    private String priorityStateKey(Game g) {
+        PhaseHandler ph = g.getPhaseHandler();
+        return ph.getTurn() + "|" + ph.getPhase() + "|" + g.getStack().size()
+                + "|" + g.getCardsIn(ZoneType.Battlefield).size()
+                + "|" + player.getCardsIn(ZoneType.Hand).size()
+                + "|" + player.getManaPool().totalMana();
     }
 
     // ====================================================================== casting sub-decisions
@@ -424,13 +468,23 @@ public class PlayerControllerExternal extends PlayerControllerAi {
     @Override
     public List<OptionalCostValue> chooseOptionalCosts(SpellAbility chosen, List<OptionalCostValue> optionalCostValues) {
         if (ai() || optionalCostValues.isEmpty()) return super.chooseOptionalCosts(chosen, optionalCostValues);
+        // Only offer optional costs that are affordable on top of the spell's own cost.
+        List<OptionalCostValue> affordable = new ArrayList<>();
+        for (OptionalCostValue ocv : optionalCostValues) {
+            try {
+                if (ComputerUtilCost.canPayCost(GameActionUtil.addOptionalCosts(chosen, Collections.singletonList(ocv)), player, false)) affordable.add(ocv);
+            } catch (RuntimeException e) {
+                affordable.add(ocv); // can't probe it: offer it and let payment decide
+            }
+        }
+        if (affordable.isEmpty()) return new ArrayList<>();
         List<Opt> opts = new ArrayList<>();
-        for (int i = 0; i < optionalCostValues.size(); i++) opts.add(new Opt("c" + (i + 1), optionalCostValues.get(i).toString(), null));
+        for (int i = 0; i < affordable.size(); i++) opts.add(new Opt("c" + (i + 1), affordable.get(i).toString(), null));
         List<String> r = ask("optional_costs", "Choose any optional costs to pay for " + (chosen.getHostCard() != null ? chosen.getHostCard().getName() : "this spell")
                 + " (e.g. kicker). Choose none to pay only the normal cost.", opts, 0, opts.size());
         if (r == null) { delegated("optional_costs", "no valid answer"); return asAi(() -> super.chooseOptionalCosts(chosen, optionalCostValues)); }
         List<OptionalCostValue> out = new ArrayList<>();
-        for (String id : r) out.add(optionalCostValues.get(Integer.parseInt(id.substring(1)) - 1));
+        for (String id : r) out.add(affordable.get(Integer.parseInt(id.substring(1)) - 1));
         return out;
     }
 
