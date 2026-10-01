@@ -106,6 +106,9 @@ public final class AgentBridge {
                 JsonArray log = new JsonArray();
                 for (GameLogEntry e : game.getGameLog().getAllEntries()) log.add(e.type() + ": " + e.message());
                 end.add("log", log);
+                JsonArray auto = new JsonArray();
+                for (int i = 0; i < 2; i++) auto.add(ctx.drainAuto(i));
+                end.add("auto", auto);
                 client.send(end);
                 Integer winner = end.has("winner") ? end.get("winner").getAsInt() : null;
                 if (winner != null) ctx.wins[winner]++;
