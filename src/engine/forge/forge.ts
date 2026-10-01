@@ -123,6 +123,19 @@ export class ForgeEngine implements GameEngine {
                 reason: msg.reason ?? "unknown", decisions: [...decisions] as [number, number], durationMs: current ? Date.now() - current.t0 : 0,
               });
               break;
+            case "between_games": {
+              // Each LLM seat rewrites its match notes from the public log; the next game waits for both.
+              try {
+                await Promise.all([0, 1].map((i) => spec.seats[i].betweenGames(spec.pod, spec.matchId, {
+                  game: msg.game, yourWins: msg.wins?.[i] ?? 0, opponentWins: msg.wins?.[1 - i] ?? 0,
+                  yourName: msg.names?.[i] ?? "?", opponentName: msg.names?.[1 - i] ?? "?", log: msg.log ?? [],
+                })));
+                send({ type: "answer", rid: msg.rid });
+              } catch (e: any) {
+                finish(`${e instanceof InfraError ? "infrastructure error" : "harness error"}: ${e?.message ?? e}`);
+              }
+              break;
+            }
             case "delegated":
               delegations.push({ seat: msg.seat, game: msg.game, what: msg.what, reason: msg.reason });
               break;

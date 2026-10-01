@@ -3,12 +3,12 @@ import { addUsage, type TokenUsage, ZERO_USAGE } from "../analytics/recorder.ts"
 import type { CardDb } from "../cards/db.ts";
 import type { EventConfig, SeatConfig } from "../config.ts";
 import { cardText, getCard } from "../cards/db.ts";
-import { type KnowledgeBase, studyTools, toolsForTier } from "../knowledge/tools.ts";
+import { type KnowledgeBase, SUBMIT_NOTES_TOOL, studyTools, toolsForTier } from "../knowledge/tools.ts";
 import { type DecisionRequest, type DecisionResponse, type DecideContext, validateResponse } from "../types.ts";
 import type { AgentResult, CallObserver, DecisionAgent } from "./agent.ts";
 import type { ChatMessage, Provider } from "./providers/types.ts";
 import type { Jsonl } from "../util/log.ts";
-import { renderRequest, systemPrompt } from "./render.ts";
+import { renderRequest, renderTemplate, systemPrompt } from "./render.ts";
 
 export class LlmAgent implements DecisionAgent {
   readonly kind: string;
@@ -31,10 +31,49 @@ export class LlmAgent implements DecisionAgent {
     return runCubeStudy(this, this.provider, this.event, this.db, this.kb, cubeCards, this.cubeName, onCall);
   }
 
+  /**
+   * Between games of a match: rewrite match notes from the game's public log (MTR 2.11 allows notes taken during a
+   * match to be used for the rest of it). Uses the game-phase system prompt so the provider's prompt cache is reused.
+   */
+  async writeMatchNotes(input: MatchNotesInput, brief: string | undefined, onCall: CallObserver): Promise<MatchNotesResult> {
+    const system = systemPrompt(this.event, "game", brief);
+    const user = renderTemplate(this.event.promptVersion, "between-games.md", {
+      game: input.game, your_wins: input.yourWins, opponent_wins: input.opponentWins,
+      your_name: input.yourName, opponent_name: input.opponentName, max_words: MATCH_NOTES_MAX_WORDS,
+      previous_notes: input.previousNotes?.trim() || "(none yet)", log: input.log.join("\n"),
+    });
+    assertNoLeak(system + "\n" + user, [this.cubeName, this.event.name]);
+    const messages: ChatMessage[] = [{ role: "user", content: user }];
+    const signal = AbortSignal.timeout(this.event.decisionTimeoutSec * 1000);
+    let usage: TokenUsage = { ...ZERO_USAGE };
+    const toolCalls: Record<string, number> = {};
+    let modelCalls = 0;
+    for (let round = 0; round <= this.event.maxRetries; round++) {
+      const t0 = Date.now();
+      let turn;
+      try { turn = await this.provider.complete({ system, messages, tools: [SUBMIT_NOTES_TOOL], signal }); }
+      catch (e: any) {
+        onCall({ turn: round, latencyMs: Date.now() - t0, usage: ZERO_USAGE, error: String(e?.message ?? e), httpStatus: e?.status, toolCallsRequested: 0 });
+        return { notes: null, usage, modelCalls, toolCalls, error: String(e?.message ?? e) };
+      }
+      modelCalls++;
+      usage = addUsage(usage, turn.usage);
+      onCall({ turn: round, latencyMs: Date.now() - t0, usage: turn.usage, stopReason: turn.stopReason, httpStatus: turn.httpStatus, toolCallsRequested: turn.toolCalls.length, servedBy: turn.servedBy });
+      messages.push({ role: "assistant", text: turn.text, toolCalls: turn.toolCalls, raw: turn.raw });
+      const call = turn.toolCalls.find((c) => c.name === "submit_notes");
+      for (const c of turn.toolCalls) toolCalls[c.name] = (toolCalls[c.name] ?? 0) + 1;
+      const notes = typeof call?.input?.notes === "string" ? call.input.notes.trim() : "";
+      if (notes) return { notes: capWords(notes, MATCH_NOTES_MAX_WORDS), usage, modelCalls, toolCalls };
+      if (!turn.toolCalls.length) messages.push({ role: "user", content: "Please submit your match notes with the submit_notes tool." });
+      else messages.push({ role: "tool", results: turn.toolCalls.map((c) => ({ id: c.id, content: "Call submit_notes with non-empty `notes`.", isError: true })) });
+    }
+    return { notes: null, usage, modelCalls, toolCalls, error: "no notes submitted" };
+  }
+
   async decide(req: DecisionRequest, ctx: DecideContext, onCall: CallObserver): Promise<AgentResult> {
     const system = systemPrompt(this.event, req.phase, ctx.brief);
     const tools = toolsForTier(this.event.knowledge);
-    const first = renderRequest(req, this.event, this.db, ctx.notes);
+    const first = renderRequest(req, this.event, this.db, ctx.notes, ctx.matchNotes);
     assertNoLeak(system + "\n" + first, [this.cubeName, this.event.name]);
     this.promptLog?.write({ seat: this.seat.id, matchId: ctx.matchId, game: ctx.game, kind: req.kind, requestId: req.requestId, prompt: first });
     const messages: ChatMessage[] = [{ role: "user", content: first }];
@@ -137,6 +176,16 @@ function sleep(ms: number, signal: AbortSignal) {
     const t = setTimeout(resolve, ms);
     signal.addEventListener("abort", () => { clearTimeout(t); resolve(); }, { once: true });
   });
+}
+
+export const MATCH_NOTES_MAX_WORDS = 400;
+
+export interface MatchNotesInput {
+  game: number; yourWins: number; opponentWins: number; yourName: string; opponentName: string;
+  previousNotes?: string; log: string[];
+}
+export interface MatchNotesResult {
+  notes: string | null; usage: TokenUsage; modelCalls: number; toolCalls: Record<string, number>; error?: string;
 }
 
 /** Hard guard: the cube / event name must never reach an agent. */

@@ -20,7 +20,7 @@ event:
   briefMaxWords: 1000
   briefScope: all                 # draft | all (draft + deckbuild + games)
   carryNotes: true                # agents may keep a scratchpad between decisions
-  promptVersion: v1               # prompts/v1/*
+  promptVersion: v2               # prompts/v2/* (v2: per-game scratchpad + match notes written between games)
   maxToolCallsPerDecision: 6
   maxRetries: 3                   # re-asks after a failed answer before the decision is forfeited (null action)
   decisionTimeoutSec: 180

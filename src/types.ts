@@ -34,7 +34,8 @@ export type DecisionKind =
   | "exert"
   | "scry" | "surveil" | "search"
   | "choose_number" | "choose_color" | "choose_option"
-  | "cube_study";     // pre-draft strategy brief (free text, not an option choice)
+  | "cube_study"      // pre-draft strategy brief (free text, not an option choice)
+  | "match_notes";    // between games: rewrite match notes from the last game's public log (free text)
 
 export interface DecisionOption {
   /** Stable id the agent returns. Opaque to the agent. */
@@ -98,6 +99,8 @@ export interface DecideContext {
   notes?: string;
   /** The seat's own pre-draft cube strategy brief, if cube study is enabled. */
   brief?: string;
+  /** Match notes the seat wrote between earlier games of this match. */
+  matchNotes?: string;
 }
 
 /** Validate a response against a request. Returns an error string or null. */

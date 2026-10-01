@@ -160,9 +160,21 @@ public final class StateView {
         return a;
     }
 
-    public static JsonObject build(Game game, Player viewer, int gameNo) {
+    /** All public log entries of a game, oldest first (the filter that keeps hidden cards out). */
+    public static JsonArray publicLog(Game game) {
+        JsonArray log = new JsonArray();
+        List<GameLogEntry> entries = game.getGameLog().getLogEntriesForTypes(PUBLIC_LOG); // newest first
+        for (int i = entries.size() - 1; i >= 0; i--) log.add(clean(entries.get(i).message()));
+        return log;
+    }
+
+    public static JsonObject build(Game game, Player viewer, MatchContext ctx, int seat) {
         JsonObject s = new JsonObject();
-        s.addProperty("game", gameNo);
+        s.addProperty("game", ctx.game);
+        JsonObject match = new JsonObject();
+        match.addProperty("gamesYouWon", ctx.wins[seat]);
+        match.addProperty("gamesOpponentWon", ctx.wins[1 - seat]);
+        s.add("match", match);
         s.addProperty("turn", game.getPhaseHandler().getTurn());
         s.addProperty("phase", String.valueOf(game.getPhaseHandler().getPhase()));
         Player active = game.getPhaseHandler().getPlayerTurn();

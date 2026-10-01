@@ -35,5 +35,5 @@ export function makeSeat(sc: SeatConfig, d: SeatDeps): Seat {
     case "echo": agent = new LlmAgent(sc, new EchoProvider(sc), d.cfg.event, d.cubeName, d.db, d.kb, log); break;
     default: throw new Error(`unknown provider ${(sc as any).provider}`);
   }
-  return new Seat(sc, agent, fallback, d.recorder);
+  return new Seat(sc, agent, fallback, d.recorder, d.cfg.event);
 }

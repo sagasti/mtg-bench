@@ -107,6 +107,27 @@ public final class AgentBridge {
                 for (GameLogEntry e : game.getGameLog().getAllEntries()) log.add(e.type() + ": " + e.message());
                 end.add("log", log);
                 client.send(end);
+                Integer winner = end.has("winner") ? end.get("winner").getAsInt() : null;
+                if (winner != null) ctx.wins[winner]++;
+                if (!match.isMatchOver() && g < games + 2) {
+                    // Between games: agents may rewrite their match notes from this game's public log (MTR 2.11:
+                    // notes taken during a match may be used for the rest of it). The next game waits for them.
+                    JsonObject between = new JsonObject();
+                    between.addProperty("game", g);
+                    JsonArray wins = new JsonArray();
+                    wins.add(ctx.wins[0]);
+                    wins.add(ctx.wins[1]);
+                    between.add("wins", wins);
+                    JsonArray names = new JsonArray();
+                    for (int i = 0; i < 2; i++) {
+                        String name = "?";
+                        for (Player p : game.getPlayers()) if (p.getLobbyPlayer().equals(lobby[i])) name = p.getName();
+                        names.add(name);
+                    }
+                    between.add("names", names);
+                    between.add("log", StateView.publicLog(game));
+                    client.exchange("between_games", between);
+                }
             }
             JsonObject done = new JsonObject();
             done.addProperty("type", "match_end");

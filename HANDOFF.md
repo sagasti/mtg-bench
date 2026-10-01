@@ -152,3 +152,19 @@ bridge/src/forge/bridge/      AgentBridge (main), PlayerControllerExternal (all 
 prompts/v1/                   versioned prompt templates
 config/                       smoke.mock.yaml, forge-bots.yaml, forge-1llm.yaml, event.example.yaml
 ```
+
+---
+
+## 6. Decisions log (owner decisions, newest first)
+
+### 2026-10-01
+- **Information exposure follows MTR 4.1 at Regular REL.** The Magic Tournament Rules sort game information into status, free, derived and private. At Regular REL derived information counts as free, so the prompt includes all status, free and derived information: current characteristics and rules text of every visible object (Forge's card-detail text), zone counts, and the match score. Private information (opponent's hand, library order, face-down identities) is never shown. Computed assessments ("is this lethal?", "does my blocker survive?") are not information; they stay out of prompts.
+- **Match notes (prompts v2, MTR 2.11).** After each game that isn't the last, an LLM seat gets the game's public log and its current match notes, and rewrites the notes with `submit_notes` (at most 400 words). They are shown in every prompt for the rest of the match. The in-game scratchpad now lasts one game, so stale state can't leak into the next. One extra model call per game. Prompt versions without `between-games.md` (v1) keep the old per-match scratchpad.
+- **Forfeits instead of rescues.** After `maxRetries` (3) failed re-asks, a decision gets the null action (pass, decline, nothing, first legal option, or a cancelled cast) and is counted as a forfeit against the agent. Delegation to Forge's AI is only for decision types the bridge doesn't offer yet. Provider failures abandon the match as an infrastructure error.
+- **Iterate gameplay with `bench match`** (fixed decks, no draft) on a cheap model: DeepSeek V4 Flash via OpenRouter, reasoning off, host pinned to one fp8 provider (Baidu). The report's reported-cost column is OpenRouter's actual charge.
+
+## 7. Future work
+
+- **Competitive-REL information tier** (decided 2026-10-01 to defer as over-complicated for now). At Competitive REL, derived information (current characteristics, zone counts, Oracle text) is something a player is entitled to but must work out or look up. A `competitive` option would show only status and free information in the prompt (names, counters, tapped/attached/zone, life, phase, score) and make derived information available through tools (`inspect(card)` for a permanent's current characteristics, zone counts, `lookup_card`), testing whether a model checks before acting. Sources: MTR 4.1 (https://blogs.magicjudges.org/rules/mtr4-1/).
+- **"Remote human" bridge spike.** Drive Forge's human controller through a headless `IGuiGame` instead of overriding `PlayerControllerAi`, so Forge validates every action as it does for a human (fixes the unpayable-miracle walk-through and mana-unaware mode choices) and supplies its own prompt wording.
+- **Sideboarding between games.** Not implemented: decks carry a sideboard (undrafted pool cards), but nobody changes decks between games. Forge calls `PlayerController.sideboard()` between games (`Match.java`), our controller inherits the AI's version, and AI sideboarding is off by default (`GameRules.AISideboardingEnabled`). The between-games step (match notes) is the natural place to add it: let the agent swap pool cards and basic lands, with Forge's AI sideboarding enabled for `forge-ai` seats so both sides get the same option. Until then, `prompts/v2/between-games.md` tells agents there is no sideboarding.

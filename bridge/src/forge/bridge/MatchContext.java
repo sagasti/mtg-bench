@@ -3,6 +3,8 @@ package forge.bridge;
 /** Per-match settings shared by both external controllers. */
 public final class MatchContext {
     public volatile int game = 0;
+    /** Games won so far in this match, by seat (free information: the match score). */
+    public final int[] wins = new int[2];
     public final int maxTurns;
     /** Only ask at meaningful priority stops (see PlayerControllerExternal.shouldStop). */
     public final boolean smartStops;

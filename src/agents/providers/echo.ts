@@ -24,7 +24,12 @@ export class EchoProvider implements Provider {
     const usedTool = messages.some((m) => m.role === "tool");
     const id = `echo_${++this.n}`;
     let toolCalls;
-    if (toolNames.includes("submit_brief") && usedTool) {
+    if (toolNames.includes("submit_notes")) {
+      const first = messages[0];
+      const prompt = first?.role === "user" ? first.content : "";
+      const lines = prompt.split("\n").filter((l: string) => / cast /.test(l)).slice(0, 5);
+      toolCalls = [{ id, name: "submit_notes", input: { notes: `Echo notes. Opponent cast:\n${lines.join("\n") || "(nothing seen)"}` } }];
+    } else if (toolNames.includes("submit_brief") && usedTool) {
       toolCalls = [{ id, name: "submit_brief", input: { brief: "Echo brief: draft the best card, stay open, aim for two colours with a low curve." } }];
     } else if (toolNames.includes("submit_brief")) {
       toolCalls = [{ id, name: "search_cube", input: { type: "Instant", max_cmc: 2 } }];

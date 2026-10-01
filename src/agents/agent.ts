@@ -4,10 +4,12 @@
  * choices, validation, fallback on failure, notes carry-over, and analytics.
  */
 import { type TokenUsage, ZERO_USAGE, type Recorder } from "../analytics/recorder.ts";
-import type { SeatConfig } from "../config.ts";
+import type { EventConfig, SeatConfig } from "../config.ts";
 import { type DecisionRequest, type DecisionResponse, type DecideContext, validateResponse } from "../types.ts";
 import { debug } from "../util/log.ts";
 import type { Bot } from "./bots.ts";
+import { type LlmAgent, type MatchNotesInput } from "./llm.ts";
+import { hasPrompt } from "./render.ts";
 
 export interface AgentResult {
   response: DecisionResponse | null;
@@ -32,8 +34,10 @@ export interface DecisionAgent {
 }
 
 export class Seat {
-  /** notes keyed by scope: "pod:<n>" for draft+deckbuild, "match:<id>" for games. */
+  /** Scratchpad keyed by scope: "pod:<n>" for draft+deckbuild; per game ("game:<match>:<n>") once match notes exist, else "match:<id>". */
   private notes = new Map<string, string>();
+  /** Match notes, by match id, written between games (prompt versions with between-games.md). */
+  private matchNotes = new Map<string, string>();
   /** This seat's own pre-draft cube strategy brief (null = none / study disabled / failed). */
   brief: string | null = null;
   constructor(
@@ -41,6 +45,7 @@ export class Seat {
     readonly agent: DecisionAgent,
     private fallback: Bot,
     private recorder: Recorder,
+    private event: EventConfig,
   ) {}
 
   get id() { return this.config.id; }
@@ -63,8 +68,30 @@ export class Seat {
     return r.brief;
   }
 
+  /**
+   * Between games of a match: an LLM seat rewrites its match notes from the game's public log. Only prompt versions
+   * with between-games.md do this. A provider outage abandons the match; a seat that won't submit notes keeps its old ones.
+   */
+  async betweenGames(pod: number, matchId: string, input: MatchNotesInput): Promise<void> {
+    if (!this.isLlm || !hasPrompt(this.event.promptVersion, "between-games.md")) return;
+    const base = { pod, seat: this.id, provider: this.provider, model: this.model, phase: "game" as const, kind: "match_notes" as const,
+      requestId: `${matchId}-g${input.game}-notes`, matchId, game: input.game };
+    const t0 = Date.now();
+    let apiFailed = false;
+    const r = await (this.agent as LlmAgent).writeMatchNotes({ ...input, previousNotes: this.matchNotes.get(matchId) }, this.brief ?? undefined, (c) => {
+      if (c.error) apiFailed = true;
+      this.recorder.call({ ...base, ...c.usage, turn: c.turn, latencyMs: c.latencyMs, stopReason: c.stopReason, httpStatus: c.httpStatus, error: c.error, toolCallsRequested: c.toolCallsRequested, servedBy: c.servedBy });
+    });
+    this.recorder.decision({ ...base, ...r.usage, numOptions: 0, choice: [], choiceLabels: [], valid: !!r.notes, invalidAttempts: 0,
+      fallback: false, forfeit: !r.notes && !apiFailed, autoResolved: false, modelCalls: r.modelCalls, toolCalls: r.toolCalls,
+      latencyMs: Date.now() - t0, rationale: r.notes ?? undefined, error: r.error });
+    if (apiFailed && !r.notes) throw new InfraError(`${this.id}: ${r.error ?? "provider failed"}`);
+    if (r.notes) this.matchNotes.set(matchId, r.notes);
+  }
+
   async decide(req: DecisionRequest, ctx: DecideContext): Promise<DecisionResponse> {
-    const scope = req.phase === "game" ? `match:${ctx.matchId}` : `pod:${ctx.pod}`;
+    const perGame = req.phase === "game" && hasPrompt(this.event.promptVersion, "between-games.md");
+    const scope = req.phase !== "game" ? `pod:${ctx.pod}` : perGame ? `game:${ctx.matchId}:${ctx.game}` : `match:${ctx.matchId}`;
     const base = {
       pod: ctx.pod, seat: this.id, provider: this.provider, model: this.model, phase: req.phase, kind: req.kind,
       requestId: req.requestId, matchId: ctx.matchId, game: ctx.game,
@@ -79,7 +106,8 @@ export class Seat {
     const t0 = Date.now();
     let result: AgentResult;
     try {
-      result = await this.agent.decide(req, { ...ctx, notes: this.notes.get(scope), brief: this.brief ?? undefined }, (c) =>
+      const matchNotes = req.phase === "game" && ctx.matchId ? this.matchNotes.get(ctx.matchId) : undefined;
+      result = await this.agent.decide(req, { ...ctx, notes: this.notes.get(scope), matchNotes, brief: this.brief ?? undefined }, (c) =>
         this.recorder.call({ ...base, ...c.usage, turn: c.turn, latencyMs: c.latencyMs, stopReason: c.stopReason, httpStatus: c.httpStatus, error: c.error, toolCallsRequested: c.toolCallsRequested, servedBy: c.servedBy }));
     } catch (e: any) {
       result = { response: null, usage: ZERO_USAGE, modelCalls: 0, toolCalls: {}, invalidAttempts: 0, error: String(e?.message ?? e) };

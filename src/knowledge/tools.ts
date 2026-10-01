@@ -18,6 +18,12 @@ export const SUBMIT_BRIEF_TOOL: ToolDef = {
   input_schema: { type: "object", properties: { brief: { type: "string" } }, required: ["brief"] },
 };
 
+export const SUBMIT_NOTES_TOOL: ToolDef = {
+  name: "submit_notes",
+  description: "Submit your match notes. They replace your previous match notes and are shown to you during the rest of this match.",
+  input_schema: { type: "object", properties: { notes: { type: "string" } }, required: ["notes"] },
+};
+
 export function studyTools(tier: KnowledgeTier): ToolDef[] {
   return tier.startsWith("oracle+tools") ? [...KNOWLEDGE_TOOLS, SUBMIT_BRIEF_TOOL] : [SUBMIT_BRIEF_TOOL];
 }

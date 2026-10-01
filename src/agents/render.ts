@@ -29,9 +29,10 @@ export function collectCardNames(req: DecisionRequest, db: CardDb): string[] {
   return [...names].filter((n) => !described.has(n)).sort();
 }
 
-export function renderRequest(req: DecisionRequest, event: EventConfig, db: CardDb, notes?: string): string {
+export function renderRequest(req: DecisionRequest, event: EventConfig, db: CardDb, notes?: string, matchNotes?: string): string {
   const parts: string[] = [];
   parts.push(`# Decision: ${req.kind}\n${req.prompt}`);
+  if (matchNotes) parts.push(`## Your match notes (written after earlier games of this match)\n${matchNotes}`);
   if (notes && event.carryNotes) parts.push(`## Your notes\n${notes}`);
   parts.push(`## State\n${YAML.stringify(req.state, { lineWidth: 0 }).trim()}`);
   const optLines = req.options.map((o) => `- [${o.id}] ${o.label}`);
@@ -50,6 +51,16 @@ export function renderRequest(req: DecisionRequest, event: EventConfig, db: Card
     }
   }
   return parts.join("\n\n");
+}
+
+/** Whether a prompt version has a given template (newer behaviour is keyed off the prompt version, so old runs reproduce). */
+export function hasPrompt(version: string, name: string): boolean {
+  return fs.existsSync(path.resolve("prompts", version, name));
+}
+
+/** Fill a template from prompts/<version>/<name>. */
+export function renderTemplate(version: string, name: string, vars: Record<string, string | number>): string {
+  return fill(readPrompt(version, name), vars);
 }
 
 const promptCache = new Map<string, string>();

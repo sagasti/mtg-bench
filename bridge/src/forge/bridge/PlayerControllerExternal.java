@@ -162,7 +162,7 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         req.addProperty("game", ctx.game);
         req.addProperty("kind", kind);
         req.addProperty("prompt", prompt);
-        JsonObject state = StateView.build(getGame(), player, ctx.game);
+        JsonObject state = StateView.build(getGame(), player, ctx, seat);
         if (extraState != null) for (Map.Entry<String, JsonElement> e : extraState.entrySet()) state.add(e.getKey(), e.getValue());
         req.add("state", state);
         JsonArray opts = new JsonArray();

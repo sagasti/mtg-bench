@@ -46,17 +46,22 @@ public final class BridgeClient implements Closeable {
     }
 
     /** Sends a decision request and blocks for the matching answer. Returns null if the connection drops. */
-    public synchronized JsonObject request(JsonObject decision) {
+    public JsonObject request(JsonObject decision) {
+        return exchange("decision", decision);
+    }
+
+    /** Sends a message of the given type and blocks for the harness's matching answer. Returns null if the connection drops. */
+    public synchronized JsonObject exchange(String type, JsonObject msg) {
         int rid = ++nextRid;
-        decision.addProperty("type", "decision");
-        decision.addProperty("rid", rid);
-        send(decision);
+        msg.addProperty("type", type);
+        msg.addProperty("rid", rid);
+        send(msg);
         try {
             String line;
             while ((line = in.readLine()) != null) {
-                JsonObject msg = JsonParser.parseString(line).getAsJsonObject();
-                if ("answer".equals(msg.get("type").getAsString()) && msg.get("rid").getAsInt() == rid) {
-                    return msg;
+                JsonObject reply = JsonParser.parseString(line).getAsJsonObject();
+                if ("answer".equals(reply.get("type").getAsString()) && reply.get("rid").getAsInt() == rid) {
+                    return reply;
                 }
             }
         } catch (IOException | RuntimeException e) {
