@@ -12,6 +12,8 @@ A benchmark for AI decision-making in Magic: The Gathering. **Eight agents cube-
 - **Legal moves by construction**: agents choose from enumerated legal options, so the benchmark measures judgement, not rules parsing.
 - **Everything logged**: every model call (tokens, including cache and reasoning, latency, errors), every decision, pick, deck and game.
 
+> **Picking this up on a new machine?** Start with [HANDOFF.md](HANDOFF.md).
+
 ## Quick start
 
 ```bash

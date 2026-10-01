@@ -112,7 +112,11 @@ export function loadConfig(file: string): BenchConfig {
   engine.forgeJar = expand(engine.forgeJar);
   engine.bridgeJar = expand(engine.bridgeJar);
   let forgeRes = expand(raw.forgeRes);
-  if (!forgeRes && engine.forgeDir) forgeRes = path.join(engine.forgeDir, "res");
+  if (!forgeRes && engine.forgeDir) {
+    // release install: <dir>/res ; source checkout: <dir>/forge-gui/res
+    const src = path.join(engine.forgeDir, "forge-gui", "res");
+    forgeRes = !fs.existsSync(path.join(engine.forgeDir, "res")) && fs.existsSync(src) ? src : path.join(engine.forgeDir, "res");
+  }
   const seats: SeatConfig[] = raw.seats ?? [];
   const cfg: BenchConfig = {
     event, engine, forgeRes,
