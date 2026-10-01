@@ -16,7 +16,8 @@ import { InfraError } from "../../agents/agent.ts";
 import type { EngineConfig } from "../../config.ts";
 import type { DecisionKind, DecisionRequest } from "../../types.ts";
 import { debug } from "../../util/log.ts";
-import type { AutoAction, Delegation, GameEngine, GameResult, MatchResult, MatchSpec } from "../types.ts";
+import { scanEngineErrors } from "./log.ts";
+import type { AutoAction, Delegation, EngineError, GameEngine, GameResult, MatchResult, MatchSpec } from "../types.ts";
 
 export function findForgeJar(forgeDir: string): string | undefined {
   const cands: string[] = [];
@@ -60,7 +61,10 @@ export class ForgeEngine implements GameEngine {
     let current: { game: number; onThePlay: 0 | 1; t0: number } | null = null;
     const logDir = path.join(spec.runDir, "forge-logs");
     fs.mkdirSync(logDir, { recursive: true });
-    const logFile = fs.openSync(path.join(logDir, `${spec.matchId}.log`), "a");
+    const logPath = path.join(logDir, `${spec.matchId}.log`);
+    const logFile = fs.openSync(logPath, "a");
+    /** Log size at each game's end, so an exception's offset in the log attributes it to a game. */
+    const gameEnds: number[] = [];
 
     return new Promise<MatchResult>((resolve) => {
       let settled = false;
@@ -73,9 +77,10 @@ export class ForgeEngine implements GameEngine {
         server.close();
         if (child && child.exitCode === null) child.kill("SIGKILL");
         try { fs.closeSync(logFile); } catch { /* ignore */ }
+        const engineErrors = scanEngineErrors(logPath, gameEnds);
         const w0 = games.filter((g) => g.winner === 0).length, w1 = games.filter((g) => g.winner === 1).length;
         resolve({ matchId: spec.matchId, pod: spec.pod, round: spec.round, seats: [spec.seats[0].id, spec.seats[1].id], games,
-          winner: w0 > w1 ? 0 : w1 > w0 ? 1 : null, delegations, forfeits, auto, error });
+          winner: w0 > w1 ? 0 : w1 > w0 ? 1 : null, delegations, forfeits, auto, engineErrors, error });
       };
       const timer = setTimeout(() => finish(`match timeout after ${this.cfg.matchTimeoutSec ?? 7200}s`), (this.cfg.matchTimeoutSec ?? 7200) * 1000);
 
@@ -122,6 +127,7 @@ export class ForgeEngine implements GameEngine {
                 fs.writeFileSync(path.join(dir, `${spec.matchId}-g${msg.game}.log`),
                   `# ${spec.matchId} game ${msg.game}: P1 = ${spec.seats[0].id}, P2 = ${spec.seats[1].id}\n` + msg.log.join("\n") + "\n");
               }
+              try { gameEnds.push(fs.fstatSync(logFile).size); } catch { /* ignore */ }
               games.push({
                 game: msg.game, winner: msg.winner ?? null, onThePlay: msg.onThePlay ?? current?.onThePlay ?? 0, turns: msg.turns ?? 0,
                 reason: msg.reason ?? "unknown", decisions: [...decisions] as [number, number], durationMs: current ? Date.now() - current.t0 : 0,
@@ -176,3 +182,4 @@ export class ForgeEngine implements GameEngine {
     });
   }
 }
+

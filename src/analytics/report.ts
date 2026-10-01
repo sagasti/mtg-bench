@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { BenchConfig, Pricing } from "../config.ts";
+import { scanEngineErrors } from "../engine/forge/log.ts";
 import type { MatchResult } from "../engine/types.ts";
 import { rate } from "../rating/bt.ts";
 import { outcomesFromMatches } from "../rating/outcomes.ts";
@@ -121,7 +122,20 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
     delegated.get(seat)!.set(key, (delegated.get(seat)!.get(key) ?? 0) + 1);
   }
 
-  return { decisions, calls, matches, bySeat, bySeatPhase, byKind, ratings, games, reasons, delegated, forfeited, provenance, playWinRate: decided.length ? playWins / decided.length : null, pricing };
+  // Exceptions Forge logged mid-game: the match completed, but its state may have been corrupt from that point.
+  const engineErrors = new Map<string, number>();
+  let matchesWithEngineErrors = 0;
+  for (const m of matches) {
+    // Runs recorded before the field existed: scan their Forge logs now.
+    if (!m.engineErrors) for (const d of runDirs) {
+      const log = path.join(d, "forge-logs", `${m.matchId}.log`);
+      if (fs.existsSync(log)) m.engineErrors = scanEngineErrors(log, m.games.map(() => Infinity));
+    }
+    if (m.engineErrors?.length) matchesWithEngineErrors++;
+    for (const e of m.engineErrors ?? []) add(engineErrors, `${e.kind} at ${e.at || "?"}`);
+  }
+
+  return { decisions, calls, matches, bySeat, bySeatPhase, byKind, ratings, games, reasons, delegated, forfeited, provenance, engineErrors, matchesWithEngineErrors, playWinRate: decided.length ? playWins / decided.length : null, pricing };
 }
 
 export function renderReport(s: ReturnType<typeof summarize>, title: string): string {
@@ -180,6 +194,19 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
     L.push(`| ${seat} | ${a.invalidAttempts} | ${rate(a.forfeits)} | ${rate(a.fallbacks)} | ${a.apiErrors} | ${tools} |`);
   }
   L.push("");
+
+  L.push("## Engine exceptions", "");
+  if (!s.engineErrors.size) L.push("None: Forge logged no exceptions during any game.", "");
+  else {
+    const n = [...s.engineErrors.values()].reduce((a, b) => a + b, 0);
+    L.push(`**${n} exception(s) in ${s.matchesWithEngineErrors} of ${s.matches.length} matches.** Forge logs these and carries on, so the affected games finished in a possibly corrupt state (a cost paid twice, a trigger dropped). Treat those matches as suspect; the stacks are in forge-logs/<match>.log.`, "");
+    L.push("| Count | Exception | First Forge frame |", "|---|---|---|");
+    for (const [k, v] of [...s.engineErrors.entries()].sort((a, b) => b[1] - a[1])) {
+      const [kind, at] = k.split(" at ");
+      L.push(`| ${v} | ${kind} | ${at} |`);
+    }
+    L.push("", "Matches: " + s.matches.filter((m) => m.engineErrors?.length).map((m) => `${m.matchId} (${m.engineErrors!.length})`).join(", "), "");
+  }
 
   L.push("## Who made each in-game decision", "");
   if (!s.provenance.size) L.push("No in-game decisions recorded.", "");
@@ -248,6 +275,7 @@ export function writeReport(runDir: string, cfg?: BenchConfig) {
     games: s.games.length, reasons: s.reasons, playWinRate: s.playWinRate,
     delegated: Object.fromEntries([...s.delegated.entries()].map(([k, m]) => [k, Object.fromEntries(m)])),
     forfeited: Object.fromEntries([...s.forfeited.entries()].map(([k, m]) => [k, Object.fromEntries(m)])),
+    engineErrors: { matches: s.matchesWithEngineErrors, byKind: Object.fromEntries(s.engineErrors) },
     provenance: Object.fromEntries([...s.provenance.entries()].map(([k, p]) => [k, { agent: p.agent, forced: Object.fromEntries(p.forced), policy: Object.fromEntries(p.policy), delegated: Object.fromEntries(p.delegated), forfeit: Object.fromEntries(p.forfeit) }])),
   };
   fs.writeFileSync(path.join(runDir, "summary.json"), JSON.stringify(json, null, 2));
