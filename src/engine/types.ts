@@ -30,6 +30,9 @@ export interface MatchSpec {
 export interface Delegation { seat: 0 | 1; game: number; what: string; reason: string }
 
 /** Actions the bridge took for a seat without asking its agent (docs/DECISION-PROVENANCE.md), counted per game. */
+/** An exception Forge logged and carried on from ("== Report a crash =="): the game continued in a possibly corrupt state. */
+export interface EngineError { game: number; kind: string; at: string }
+
 export interface AutoAction { seat: 0 | 1; game: number; category: "forced" | "policy" | "delegated"; what: string; reason: string; count: number }
 
 export interface GameResult {
@@ -54,6 +57,8 @@ export interface MatchResult {
   forfeits?: Delegation[];
   /** Forced and policy actions the bridge took without asking the agent. */
   auto?: AutoAction[];
+  /** Exceptions Forge logged mid-game (the match still completed). Any count > 0 makes the match suspect. */
+  engineErrors?: EngineError[];
   error?: string;
 }
 
