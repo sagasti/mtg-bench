@@ -163,6 +163,7 @@ export class ForgeEngine implements GameEngine {
           "--external0", String(!spec.seats[0].usesForgeAi), "--external1", String(!spec.seats[1].usesForgeAi),
           "--games", String(spec.gamesPerMatch), "--seed", String(spec.seed), "--max-turns", String(spec.maxGameTurns),
           "--stops", spec.priorityStops, "--mana", spec.manaPayment, "--max-retries", String(spec.maxRetries),
+          "--human", String(this.cfg.controller === "human"),
         ];
         fs.writeSync(logFile, `$ ${this.cfg.java ?? "java"} ${args.join(" ")}\n(cwd ${cwd})\n`);
         child = spawn(this.cfg.java ?? "java", args, { cwd, stdio: ["ignore", logFile, logFile] });

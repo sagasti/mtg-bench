@@ -78,7 +78,9 @@ export interface EngineConfig {
   forgeDir?: string;
   forgeJar?: string;             // defaults to newest forge-gui-desktop-*-jar-with-dependencies.jar in forgeDir
   bridgeJar?: string;            // defaults to bridge/build/mtg-bench-bridge.jar
-  java?: string;                 // java binary (default "java")
+  java?: string;
+  /** Which Forge controller agent seats use: "ai" (PlayerControllerExternal, default) or "human" (spike: Forge's human controller + headless screen). */
+  controller?: "ai" | "human";                 // java binary (default "java")
   javaOpts?: string[];
   matchTimeoutSec?: number;      // hard wall-clock cap per match
   /** Seats whose in-game decisions go to Forge AI even if they're LLMs (debug). */

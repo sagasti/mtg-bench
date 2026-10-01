@@ -66,7 +66,9 @@ public final class AgentBridge {
                 if (deck == null) throw new IllegalArgumentException("could not load deck " + a.get("deck" + s));
                 String name = "P" + (s + 1); // neutral names: agents never learn who they are playing
                 boolean external = Boolean.parseBoolean(a.getOrDefault("external" + s, "true"));
-                lobby[s] = external ? new LobbyPlayerExternal(name, client, ctx, s) : GamePlayerUtil.createAiPlayer(name, s);
+                boolean human = Boolean.parseBoolean(a.getOrDefault("human", "false")); // spike: Forge's human controller + headless screen
+                lobby[s] = !external ? GamePlayerUtil.createAiPlayer(name, s)
+                        : human ? new LobbyPlayerAgentHuman(name, client, ctx, s) : new LobbyPlayerExternal(name, client, ctx, s);
                 RegisteredPlayer rp = new RegisteredPlayer(deck);
                 rp.setPlayer(lobby[s]);
                 players.add(rp);
