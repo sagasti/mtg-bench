@@ -29,6 +29,9 @@ export interface MatchSpec {
 /** A decision Forge's AI made on an agent's behalf (answer missing/illegal, or a rare decision type). */
 export interface Delegation { seat: 0 | 1; game: number; what: string; reason: string }
 
+/** Actions the bridge took for a seat without asking its agent (docs/DECISION-PROVENANCE.md), counted per game. */
+export interface AutoAction { seat: 0 | 1; game: number; category: "forced" | "policy" | "delegated"; what: string; reason: string; count: number }
+
 export interface GameResult {
   game: number;                  // 1-based
   winner: 0 | 1 | null;          // index into spec.seats; null = draw
@@ -49,6 +52,8 @@ export interface MatchResult {
   delegations?: Delegation[];
   /** Decisions the bridge forfeited after the agent's answers kept failing in-game (e.g. lands that can't pay). */
   forfeits?: Delegation[];
+  /** Forced and policy actions the bridge took without asking the agent. */
+  auto?: AutoAction[];
   error?: string;
 }
 

@@ -365,7 +365,7 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         agentChosen = null;
         if (turnCapReached()) return null;
         if (ai()) return super.chooseSpellAbilityToPlay();
-        if (!shouldStop()) return null;
+        if (!shouldStop()) { ctx.auto(seat, "policy", "priority", "not a meaningful stop"); return null; }
         Game g = getGame();
         String stateKey = priorityStateKey(g);
         if (!stateKey.equals(failedCastsKey)) {
@@ -422,7 +422,7 @@ public class PlayerControllerExternal extends PlayerControllerAi {
                 // Some abilities throw when probed out of context; they are simply not offered.
             }
         }
-        if (opts.size() == 1) return null;
+        if (opts.size() == 1) { ctx.auto(seat, "policy", "priority", "nothing playable and affordable"); return null; }
         String prompt = g.getStack().isEmpty()
                 ? "You have priority. Play a land, cast a spell, activate an ability, or pass."
                 : "You have priority with objects on the stack. Respond, or pass to let the top object resolve.";
@@ -667,12 +667,21 @@ public class PlayerControllerExternal extends PlayerControllerAi {
             delegated("mana_payment", "could not enumerate mana sources");
             return asAi(() -> super.payManaCost(toPay, costPartMana, sa, prompt, matrix, effect));
         }
-        if (need == null || need.isPaid() || sources.isEmpty()) return asAi(() -> super.payManaCost(toPay, costPartMana, sa, prompt, matrix, effect));
+        if (need == null || need.isPaid() || sources.isEmpty()) {
+            ctx.auto(seat, "forced", "mana_payment", "nothing to choose");
+            return asAi(() -> super.payManaCost(toPay, costPartMana, sa, prompt, matrix, effect));
+        }
         Set<String> names = new HashSet<>();
-        for (Card c : sources) names.add(c.getName());
-        boolean meaningful = sources.size() > need.getConvertedManaCost() && names.size() > 1;
+        boolean interchangeable = true;
+        for (Card c : sources) {
+            names.add(c.getName());
+            if (!InputDriver.interchangeableSource(c)) interchangeable = false;
+        }
+        boolean meaningful = sources.size() > need.getConvertedManaCost() && (names.size() > 1 || !interchangeable);
         if (!meaningful && !ctx.alwaysAskMana) {
             // Every legal payment taps the same kind of sources: nothing to decide.
+            ctx.auto(seat, "policy", "mana_payment", sources.size() <= need.getConvertedManaCost() ? "exactly enough sources"
+                    : "interchangeable sources: same-name lands, nothing attached, no counters (engine pays)");
             return asAi(() -> super.payManaCost(toPay, costPartMana, sa, prompt, matrix, effect));
         }
         List<Opt> opts = new ArrayList<>();

@@ -91,6 +91,27 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
   for (const d of decisions) if (d.forfeit) bump(d.seat, `${d.kind} (no valid answer)`);
   for (const m of matches) for (const f of m.forfeits ?? []) bump(m.seats[f.seat], `${f.what} (${f.reason.replace(/ in \d+ attempts.*/, "")})`);
 
+  // Who decided each in-game decision (docs/DECISION-PROVENANCE.md): the agent, forced (one legal action),
+  // policy (a configured rule), delegated (Forge's AI or a default), forfeit (the agent failed).
+  const provenance = new Map<string, { agent: number; forced: Map<string, number>; policy: Map<string, number>; delegated: Map<string, number>; forfeit: Map<string, number> }>();
+  const prov = (seat: string) => {
+    if (!provenance.has(seat)) provenance.set(seat, { agent: 0, forced: new Map(), policy: new Map(), delegated: new Map(), forfeit: new Map() });
+    return provenance.get(seat)!;
+  };
+  const add = (m: Map<string, number>, k: string, n = 1) => m.set(k, (m.get(k) ?? 0) + n);
+  for (const d of decisions) {
+    if (d.phase !== "game") continue;
+    const p = prov(d.seat);
+    if (d.autoResolved) add(p.forced, `${d.kind}: only one option`);
+    else if (d.forfeit) add(p.forfeit, `${d.kind}: no valid answer`);
+    else if (!d.fallback) p.agent++;
+  }
+  for (const m of matches) {
+    for (const a of m.auto ?? []) add((prov(m.seats[a.seat]) as any)[a.category] ?? prov(m.seats[a.seat]).policy, `${a.what}: ${a.reason}`, a.count);
+    for (const d of m.delegations ?? []) add(prov(m.seats[d.seat]).delegated, `${d.what}: ${d.reason}`);
+    for (const f of m.forfeits ?? []) add(prov(m.seats[f.seat]).forfeit, `${f.what}: ${f.reason.replace(/ in \d+ attempts.*/, "")}`);
+  }
+
   // Decisions Forge's AI made on an agent's behalf (Forge engine only)
   const delegated = new Map<string, Map<string, number>>();
   for (const m of matches) for (const d of m.delegations ?? []) {
@@ -100,7 +121,7 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
     delegated.get(seat)!.set(key, (delegated.get(seat)!.get(key) ?? 0) + 1);
   }
 
-  return { decisions, calls, matches, bySeat, bySeatPhase, byKind, ratings, games, reasons, delegated, forfeited, playWinRate: decided.length ? playWins / decided.length : null, pricing };
+  return { decisions, calls, matches, bySeat, bySeatPhase, byKind, ratings, games, reasons, delegated, forfeited, provenance, playWinRate: decided.length ? playWins / decided.length : null, pricing };
 }
 
 export function renderReport(s: ReturnType<typeof summarize>, title: string): string {
@@ -160,6 +181,27 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
   }
   L.push("");
 
+  L.push("## Who made each in-game decision", "");
+  if (!s.provenance.size) L.push("No in-game decisions recorded.", "");
+  else {
+    L.push("Every in-game action for a seat, by who chose it (definitions in docs/DECISION-PROVENANCE.md). **forced**: only one legal action existed. **policy**: a configured rule acted (meaningful stops, auto mana payment when every source is the same kind, no sideboarding). **delegated**: a real choice made by Forge's AI or a default; this should be near zero. **forfeit**: the agent failed and got the null action.", "");
+    L.push("| Seat | Agent | Forced | Policy | Delegated | Forfeit | Agent share of real choices |", "|---|---|---|---|---|---|---|");
+    const sum = (m: Map<string, number>) => [...m.values()].reduce((a, b) => a + b, 0);
+    for (const [seat, p] of [...s.provenance.entries()].sort()) {
+      const real = p.agent + sum(p.delegated) + sum(p.forfeit);
+      L.push(`| ${seat} | ${p.agent} | ${sum(p.forced)} | ${sum(p.policy)} | ${sum(p.delegated)} | ${sum(p.forfeit)} | ${real ? ((100 * p.agent) / real).toFixed(1) + "%" : "–"} |`);
+    }
+    L.push("", "Breakdown (count: decision: reason):", "");
+    for (const [seat, p] of [...s.provenance.entries()].sort()) {
+      for (const cat of ["forced", "policy", "delegated", "forfeit"] as const) {
+        const m = p[cat];
+        if (!m.size) continue;
+        L.push(`- ${seat} · **${cat}**: ` + [...m.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${v} ${k}`).join("; "));
+      }
+    }
+    L.push("");
+  }
+
   L.push("## Forfeited decisions", "");
   if (!s.forfeited.size) L.push("None.", "");
   else {
@@ -206,6 +248,7 @@ export function writeReport(runDir: string, cfg?: BenchConfig) {
     games: s.games.length, reasons: s.reasons, playWinRate: s.playWinRate,
     delegated: Object.fromEntries([...s.delegated.entries()].map(([k, m]) => [k, Object.fromEntries(m)])),
     forfeited: Object.fromEntries([...s.forfeited.entries()].map(([k, m]) => [k, Object.fromEntries(m)])),
+    provenance: Object.fromEntries([...s.provenance.entries()].map(([k, p]) => [k, { agent: p.agent, forced: Object.fromEntries(p.forced), policy: Object.fromEntries(p.policy), delegated: Object.fromEntries(p.delegated), forfeit: Object.fromEntries(p.forfeit) }])),
   };
   fs.writeFileSync(path.join(runDir, "summary.json"), JSON.stringify(json, null, 2));
 }

@@ -16,7 +16,7 @@ import { InfraError } from "../../agents/agent.ts";
 import type { EngineConfig } from "../../config.ts";
 import type { DecisionKind, DecisionRequest } from "../../types.ts";
 import { debug } from "../../util/log.ts";
-import type { Delegation, GameEngine, GameResult, MatchResult, MatchSpec } from "../types.ts";
+import type { AutoAction, Delegation, GameEngine, GameResult, MatchResult, MatchSpec } from "../types.ts";
 
 export function findForgeJar(forgeDir: string): string | undefined {
   const cands: string[] = [];
@@ -55,6 +55,7 @@ export class ForgeEngine implements GameEngine {
     const games: GameResult[] = [];
     const delegations: Delegation[] = [];
     const forfeits: Delegation[] = [];
+    const auto: AutoAction[] = [];
     const decisions: [number, number] = [0, 0];
     let current: { game: number; onThePlay: 0 | 1; t0: number } | null = null;
     const logDir = path.join(spec.runDir, "forge-logs");
@@ -74,7 +75,7 @@ export class ForgeEngine implements GameEngine {
         try { fs.closeSync(logFile); } catch { /* ignore */ }
         const w0 = games.filter((g) => g.winner === 0).length, w1 = games.filter((g) => g.winner === 1).length;
         resolve({ matchId: spec.matchId, pod: spec.pod, round: spec.round, seats: [spec.seats[0].id, spec.seats[1].id], games,
-          winner: w0 > w1 ? 0 : w1 > w0 ? 1 : null, delegations, forfeits, error });
+          winner: w0 > w1 ? 0 : w1 > w0 ? 1 : null, delegations, forfeits, auto, error });
       };
       const timer = setTimeout(() => finish(`match timeout after ${this.cfg.matchTimeoutSec ?? 7200}s`), (this.cfg.matchTimeoutSec ?? 7200) * 1000);
 
@@ -112,6 +113,9 @@ export class ForgeEngine implements GameEngine {
               break;
             }
             case "game_end":
+              if (Array.isArray(msg.auto)) {
+                for (const i of [0, 1] as const) for (const a of msg.auto[i] ?? []) auto.push({ seat: i, game: msg.game, ...a });
+              }
               if (Array.isArray(msg.log)) {
                 const dir = path.join(spec.runDir, "games");
                 fs.mkdirSync(dir, { recursive: true });

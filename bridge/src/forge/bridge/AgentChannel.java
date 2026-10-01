@@ -59,6 +59,21 @@ final class AgentChannel {
         return out.size() < min || out.size() > max ? null : out;
     }
 
+    void auto(String category, String what, String reason) {
+        ctx.auto(seat, category, what, reason);
+    }
+
+    /** The agent's answers kept failing in-game and it got the null action (counted against the agent). */
+    void forfeited(String what, String reason) {
+        JsonObject o = new JsonObject();
+        o.addProperty("type", "forfeit");
+        o.addProperty("seat", seat);
+        o.addProperty("game", ctx.game);
+        o.addProperty("what", what);
+        o.addProperty("reason", reason);
+        client.send(o);
+    }
+
     void delegated(String what, String reason) {
         JsonObject o = new JsonObject();
         o.addProperty("type", "delegated");

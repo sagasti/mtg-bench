@@ -5,6 +5,33 @@ public final class MatchContext {
     public volatile int game = 0;
     /** Games won so far in this match, by seat (free information: the match score). */
     public final int[] wins = new int[2];
+    /**
+     * Actions taken for a seat WITHOUT asking its agent, counted per game by "category|what|reason" (see
+     * docs/DECISION-PROVENANCE.md). forced = only one legal action; policy = a configured rule (e.g. meaningful stops,
+     * auto mana payment); delegated = a real choice made by Forge's AI or a default. Sent with game_end, then reset.
+     */
+    @SuppressWarnings("unchecked")
+    public final java.util.Map<String, Integer>[] auto = new java.util.Map[] { new java.util.TreeMap<>(), new java.util.TreeMap<>() };
+
+    public synchronized void auto(int seat, String category, String what, String reason) {
+        auto[seat].merge(category + "|" + what + "|" + reason, 1, Integer::sum);
+    }
+
+    /** This game's counts for a seat as JSON, then cleared for the next game. */
+    public synchronized com.google.gson.JsonArray drainAuto(int seat) {
+        com.google.gson.JsonArray a = new com.google.gson.JsonArray();
+        for (java.util.Map.Entry<String, Integer> e : auto[seat].entrySet()) {
+            String[] k = e.getKey().split("\\|", 3);
+            com.google.gson.JsonObject o = new com.google.gson.JsonObject();
+            o.addProperty("category", k[0]);
+            o.addProperty("what", k[1]);
+            o.addProperty("reason", k[2]);
+            o.addProperty("count", e.getValue());
+            a.add(o);
+        }
+        auto[seat].clear();
+        return a;
+    }
     public final int maxTurns;
     /** Only ask at meaningful priority stops (see PlayerControllerExternal.shouldStop). */
     public final boolean smartStops;

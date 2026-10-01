@@ -45,22 +45,49 @@ public class AgentGuiGame extends AbstractGuiGame {
 
     // ------------------------------------------------------------------ recorded by InputDriver
 
-    @Override public void showPromptMessage(PlayerView playerView, String message, CardView card) { prompt = message == null ? "" : message; promptSeq++; }
+    @Override public void showPromptMessage(PlayerView playerView, String message, CardView card) {
+        // Forge's "waiting for opponent" timer (AbstractGuiGame.awaitNextInput, final) rewrites the prompt and buttons
+        // 250 ms after an input ends, possibly after the next input set its own. Headless: ignore that message and its buttons.
+        if (message != null && isWaitingMessage(message)) { ignoreNextButtons = true; return; }
+        prompt = message == null ? "" : message;
+        promptSeq++;
+    }
+
+    private volatile boolean ignoreNextButtons = false;
+
+    private static boolean isWaitingMessage(String message) {
+        forge.util.Localizer l = forge.util.Localizer.getInstance();
+        String opp = l.getMessage("lblWaitingForOpponent");
+        String player = l.getMessage("lblWaitingForPlayer", "\u0001");
+        String playerPrefix = player.substring(0, Math.max(0, player.indexOf('\u0001')));
+        return message.contains(opp) || (!playerPrefix.isEmpty() && message.contains(playerPrefix));
+    }
     @Override public void updateButtons(PlayerView owner, String label1, String label2, boolean enable1, boolean enable2, boolean focus1) {
+        if (ignoreNextButtons) { ignoreNextButtons = false; return; }
         okLabel = label1; cancelLabel = label2; okEnabled = enable1; cancelEnabled = enable2;
     }
+    /** How many selectable objects the current selection input wants (Forge's own min/max). */
+    volatile int selMin = 0, selMax = 1;
+    @Override public void setSelectables(Iterable<CardView> cards, int min, int max) { super.setSelectables(cards, min, max); selMin = min; selMax = max; }
+
     @Override public void flashIncorrectAction() { lastError = "That action isn't allowed right now."; }
     @Override public void showErrorDialog(String message, String title) { lastError = message; }
     @Override public void message(String message, String title) { lastError = message; }
 
     /** Skipped phases: same "meaningful stops" as the AI-controller bridge (MatchContext.smartStops). */
+    private final java.util.Set<String> skippedStops = new java.util.HashSet<>();
+
     @Override
     public boolean isUiSetToSkipPhase(PlayerView playerTurn, PhaseType phase) {
         if (!ch.ctx.smartStops || phase == null) return false;
         boolean myTurn = ch.player != null && ch.player.getView().equals(playerTurn);
-        if (myTurn) return !(phase.isMain() || phase == PhaseType.COMBAT_DECLARE_BLOCKERS);
-        return !(phase == PhaseType.COMBAT_DECLARE_ATTACKERS || phase == PhaseType.COMBAT_DECLARE_BLOCKERS
-                || phase == PhaseType.END_OF_TURN || phase == PhaseType.UPKEEP);
+        boolean skip = myTurn ? !(phase.isMain() || phase == PhaseType.COMBAT_DECLARE_BLOCKERS)
+                : !(phase == PhaseType.COMBAT_DECLARE_ATTACKERS || phase == PhaseType.COMBAT_DECLARE_BLOCKERS
+                    || phase == PhaseType.END_OF_TURN || phase == PhaseType.UPKEEP);
+        // Count each skipped stop once per turn and phase (Forge may ask more than once).
+        if (skip && ch.player != null && skippedStops.add(ch.player.getGame().getPhaseHandler().getTurn() + ":" + phase))
+            ch.auto("policy", "priority", "phase is not a meaningful stop");
+        return skip;
     }
 
     // ------------------------------------------------------------------ dialog questions -> decisions
@@ -165,42 +192,134 @@ public class AgentGuiGame extends AbstractGuiGame {
         return new OrderResult<>(ordered, false);
     }
 
+    private static final int MAX_ENUMERATED_SPLITS = 60;
+
+    /** Every way to split `total` into parts within [lo[i], hi[i]], or null if there are more than `cap`. */
+    private static List<int[]> splits(int total, int[] lo, int[] hi, int cap) {
+        List<int[]> out = new ArrayList<>();
+        int[] cur = new int[lo.length];
+        if (!fill(0, total, lo, hi, cur, out, cap)) return null;
+        return out;
+    }
+
+    private static boolean fill(int i, int left, int[] lo, int[] hi, int[] cur, List<int[]> out, int cap) {
+        if (i == lo.length - 1) {
+            if (left < lo[i] || left > hi[i]) return true;
+            cur[i] = left;
+            out.add(cur.clone());
+            return out.size() <= cap;
+        }
+        for (int v = lo[i]; v <= Math.min(hi[i], left); v++) {
+            cur[i] = v;
+            if (!fill(i + 1, left - v, lo, hi, cur, out, cap)) return false;
+        }
+        return true;
+    }
+
     @Override
     public Map<CardView, Integer> assignCombatDamage(CardView attacker, List<CardView> blockers, int damage, GameEntityView defender, boolean overrideOrder, boolean maySkip) {
-        // Spike: lethal damage to each blocker in order, the rest to the defender (trample) or the last blocker.
-        ch.delegated("assign_damage", "spike default: lethal to each blocker in order");
-        Map<CardView, Integer> out = new HashMap<>();
+        // Current rules: divide freely among blockers; with trample the player gets damage only after every blocker
+        // has lethal. The default (lethal to each blocker in order, rest to the player or the last blocker) is first.
+        int n = blockers.size() + (defender != null ? 1 : 0);
+        int[] lo = new int[n], hi = new int[n];
+        for (int i = 0; i < n; i++) hi[i] = damage;
+        int[] def = new int[n];
         int left = damage;
-        for (CardView b : blockers) {
-            int d = Math.min(left, Math.max(0, b.getLethalDamage()));
-            out.put(b, d);
-            left -= d;
+        for (int i = 0; i < blockers.size(); i++) { def[i] = Math.min(left, Math.max(0, blockers.get(i).getLethalDamage())); left -= def[i]; }
+        if (left > 0) def[defender != null ? n - 1 : Math.max(0, blockers.size() - 1)] += left;
+        List<int[]> all = splits(damage, lo, hi, MAX_ENUMERATED_SPLITS * 4);
+        List<int[]> legal = new ArrayList<>();
+        legal.add(def);
+        if (all != null) for (int[] sp : all) {
+            if (java.util.Arrays.equals(sp, def)) continue;
+            if (defender != null && sp[n - 1] > 0) {
+                boolean lethalAll = true;
+                for (int i = 0; i < blockers.size(); i++) if (sp[i] < blockers.get(i).getLethalDamage()) lethalAll = false;
+                if (!lethalAll) continue;
+            }
+            legal.add(sp);
         }
-        if (left > 0) {
-            if (defender != null) out.put(null, left);
-            else if (!blockers.isEmpty()) out.merge(blockers.get(blockers.size() - 1), left, Integer::sum);
+        if (all == null || legal.size() > MAX_ENUMERATED_SPLITS || legal.size() == 1) {
+            if (legal.size() == 1) ch.auto("forced", "assign_damage", "only one legal split");
+            else ch.delegated("assign_damage", "too many possible splits; default used (lethal to each blocker in order)");
+            return toDamageMap(blockers, defender, def);
         }
+        List<String> labels = new ArrayList<>();
+        for (int[] sp : legal) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < blockers.size(); i++) sb.append(i > 0 ? ", " : "").append(label(blockers.get(i))).append(": ").append(sp[i]);
+            if (defender != null) sb.append(", defending ").append(label(defender)).append(": ").append(sp[n - 1]);
+            labels.add(sb.toString());
+        }
+        int i = chooseIndex("assign_damage", "Assign " + damage + " combat damage from " + label(attacker) + " among its blockers"
+                + (defender != null ? " (trample: the player gets damage only after each blocker has lethal)" : "") + ".", labels, false);
+        return toDamageMap(blockers, defender, legal.get(Math.max(0, i)));
+    }
+
+    private static Map<CardView, Integer> toDamageMap(List<CardView> blockers, GameEntityView defender, int[] sp) {
+        Map<CardView, Integer> out = new HashMap<>();
+        for (int i = 0; i < blockers.size(); i++) out.put(blockers.get(i), sp[i]);
+        if (defender != null && sp[blockers.size()] > 0) out.put(null, sp[blockers.size()]);
         return out;
     }
 
     @Override
     public Map<Object, Integer> assignGenericAmount(CardView effectSource, Map<Object, Integer> target, int amount, boolean atLeastOne, String amountLabel) {
-        ch.delegated("divide", "spike default: even split");
-        Map<Object, Integer> out = new HashMap<>();
         List<Object> keys = new ArrayList<>(target.keySet());
-        for (int i = 0; i < keys.size(); i++) out.put(keys.get(i), amount / keys.size() + (i < amount % keys.size() ? 1 : 0));
+        int n = keys.size();
+        int[] lo = new int[n], hi = new int[n];
+        for (int i = 0; i < n; i++) { lo[i] = atLeastOne ? 1 : 0; hi[i] = Math.max(lo[i], target.get(keys.get(i))); }
+        List<int[]> all = splits(amount, lo, hi, MAX_ENUMERATED_SPLITS);
+        if (all == null || all.isEmpty()) {
+            ch.delegated("divide", all == null ? "too many ways to divide; even split used" : "no legal split found; even split used");
+            Map<Object, Integer> out = new HashMap<>();
+            for (int i = 0; i < n; i++) out.put(keys.get(i), amount / n + (i < amount % n ? 1 : 0));
+            return out;
+        }
+        if (all.size() == 1) ch.auto("forced", "divide", "only one legal split");
+        int pick = 0;
+        if (all.size() > 1) {
+            List<String> labels = new ArrayList<>();
+            for (int[] sp : all) {
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < n; i++) sb.append(i > 0 ? ", " : "").append(label(keys.get(i))).append(": ").append(sp[i]);
+                labels.add(sb.toString());
+            }
+            pick = Math.max(0, chooseIndex("divide", "Divide " + amount + " " + (amountLabel != null ? amountLabel : "") + " from "
+                    + (effectSource != null ? label(effectSource) : "this effect") + " among the targets.", labels, false));
+        }
+        Map<Object, Integer> out = new HashMap<>();
+        for (int i = 0; i < n; i++) out.put(keys.get(i), all.get(pick)[i]);
         return out;
     }
 
     @Override
     public List<CardView> manipulateCardList(String title, Iterable<CardView> cards, Iterable<CardView> manipulable, boolean toTop, boolean toBottom, boolean toAnywhere) {
-        ch.delegated("manipulate_cards", "spike: card order unchanged");
-        List<CardView> out = new ArrayList<>();
-        for (CardView c : cards) out.add(c);
+        List<CardView> all = new ArrayList<>(), manip = new ArrayList<>();
+        for (CardView c : cards) all.add(c);
+        for (CardView c : manipulable) manip.add(c);
+        if (toAnywhere || manip.isEmpty()) {
+            if (toAnywhere) ch.delegated("manipulate_cards", "arbitrary positions not offered yet; order unchanged");
+            return all;
+        }
+        // Which cards go to the bottom (when both top and bottom are allowed), then the order of the top cards.
+        List<CardView> bottom = new ArrayList<>();
+        if (toTop && toBottom) bottom.addAll(getChoices(title + " Choose the cards to put on the bottom (none = keep all on top).", 0, manip.size(), manip, null, null));
+        else if (toBottom) bottom.addAll(manip);
+        List<CardView> top = new ArrayList<>(manip);
+        top.removeAll(bottom);
+        if (top.size() > 1) top = order(title + " Order the cards staying on top", "top card", 0, 0, top, null, null, false, false).ordered();
+        if (bottom.size() > 1) ch.auto("policy", "scry", "order of cards put on the bottom unchanged");
+        List<CardView> out = new ArrayList<>(top);
+        for (CardView c : all) if (!manip.contains(c)) out.add(c);
+        out.addAll(bottom);
         return out;
     }
 
-    @Override public List<PaperCard> sideboard(CardPool sideboard, CardPool main, String message) { return null; }
+    @Override public List<PaperCard> sideboard(CardPool sideboard, CardPool main, String message) {
+        ch.auto("policy", "sideboard", "no sideboarding (not implemented)");
+        return null;
+    }
 
     // ------------------------------------------------------------------ display-only: nothing to show headless
 
