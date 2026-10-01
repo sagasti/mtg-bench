@@ -680,8 +680,8 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         boolean meaningful = sources.size() > need.getConvertedManaCost() && (names.size() > 1 || !interchangeable);
         if (!meaningful && !ctx.alwaysAskMana) {
             // Every legal payment taps the same kind of sources: nothing to decide.
-            ctx.auto(seat, "policy", "mana_payment", sources.size() <= need.getConvertedManaCost() ? "exactly enough sources"
-                    : "interchangeable sources: same-name lands, nothing attached, no counters (engine pays)");
+            if (sources.size() <= need.getConvertedManaCost()) ctx.auto(seat, "forced", "mana_payment", "exactly enough sources");
+            else ctx.auto(seat, "policy", "mana_payment", "interchangeable sources: same-name lands, nothing attached, no counters (engine pays)");
             return asAi(() -> super.payManaCost(toPay, costPartMana, sa, prompt, matrix, effect));
         }
         List<Opt> opts = new ArrayList<>();
