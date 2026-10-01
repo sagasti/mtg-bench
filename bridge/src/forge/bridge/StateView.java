@@ -13,6 +13,10 @@ import forge.game.GameLogEntry;
 import forge.game.GameLogEntryType;
 import forge.game.card.Card;
 import forge.game.card.CardCollectionView;
+import forge.game.card.CardView;
+import forge.game.player.PlayerView;
+import forge.game.spellability.StackItemView;
+import forge.gui.card.CardDetailUtil;
 import forge.card.MagicColor;
 import forge.game.card.CounterType;
 import forge.game.keyword.KeywordInterface;
@@ -49,78 +53,43 @@ public final class StateView {
     public static JsonObject card(Card c, Player viewer, boolean includeHiddenName) {
         JsonObject o = new JsonObject();
         o.addProperty("id", id(c));
-        boolean hidden = c.isFaceDown() && !c.getController().equals(viewer) && !includeHiddenName;
+        CardView cv = c.getView();
+        PlayerView pv = viewer.getView();
+        boolean hidden = c.isFaceDown() && !includeHiddenName && !cv.canFaceDownBeShownTo(pv);
         o.addProperty("name", hidden ? "face-down card" : c.getName());
         if (c.isFaceDown() && !hidden) o.addProperty("faceDown", true);
         if (c.isToken()) o.addProperty("token", true);
         boolean onField = c.isInZone(ZoneType.Battlefield);
         if (onField || c.isToken()) {
-            // Current characteristics, after every continuous effect: what the rules engine is using right now.
-            o.addProperty("types", c.getType().toString());
-            o.addProperty("colors", colors(c));
-            if (!hidden) {
-                JsonArray kws = keywords(c);
-                if (kws.size() > 0) o.add("keywords", kws);
-                String text = currentText(c);
-                if (!text.isEmpty() && (c.isToken() || isModified(c))) o.addProperty("text", text);
-            }
+            // Forge's own card-detail text, as a human sees it on hover: current rules text after every effect,
+            // counters, attachments, chosen colour/type, imprinted/exiled-with cards, shields, text changes...
+            // Forge decides visibility; a face-down card shows only its face-down characteristics.
+            boolean canShow = cv.canBeShownTo(pv);
+            // Current rules text after every effect, from the live card: the view's tracked copy of it stays empty in
+            // a headless game. Then the rest of Forge's card-detail text (counters, attachments, exiled-with, chosen
+            // colour/type, shields...).
+            String rules = canShow ? clean(c.getAbilityText()) : "";
+            String detail = clean(CardDetailUtil.composeCardText(cv.getCurrentState(), c.getGame().getView(), canShow));
+            String text = rules.isEmpty() || detail.contains(rules) ? detail : (rules + (detail.isEmpty() ? "" : "\n" + detail));
+            if (!text.isEmpty()) o.addProperty("text", text);
         }
         if (c.isCreature()) {
             o.addProperty("pt", c.getNetPower() + "/" + c.getNetToughness());
-            if (onField && (c.getNetPower() != c.getBasePower() || c.getNetToughness() != c.getBaseToughness()))
-                o.addProperty("basePt", c.getBasePower() + "/" + c.getBaseToughness());
             if (c.getDamage() > 0) o.addProperty("damage", c.getDamage());
             if (onField && c.isSick() && c.getController().equals(viewer)) o.addProperty("summoningSick", true);
         }
         if (c.isTapped()) o.addProperty("tapped", true);
         if (c.isPhasedOut()) o.addProperty("phasedOut", true);
-        Multiset<CounterType> counters = c.getCounters();
-        if (counters != null && !counters.isEmpty()) {
-            JsonObject co = new JsonObject();
-            for (Multiset.Entry<CounterType> e : counters.entrySet()) co.addProperty(e.getElement().toString(), e.getCount());
-            o.add("counters", co);
-        }
-        Card attachedTo = c.getAttachedTo();
-        if (attachedTo != null) o.addProperty("attachedTo", id(attachedTo));
-        CardCollectionView attached = c.getAttachedCards();
-        if (attached != null && !attached.isEmpty()) {
-            JsonArray at = new JsonArray();
-            for (Card a : attached) at.add(id(a));
-            o.add("attachments", at);
-        }
         if (!c.getController().equals(c.getOwner())) o.addProperty("owner", label(viewer, c.getOwner()));
         return o;
     }
 
-    private static String colors(Card c) {
-        String s = c.getColor().toString();
-        return s == null || s.isEmpty() ? "colorless" : s;
-    }
-
-    private static JsonArray keywords(Card c) {
-        JsonArray a = new JsonArray();
-        for (KeywordInterface k : c.getKeywords()) {
-            String t = k.getTitle();
-            if (t != null && !t.isEmpty()) a.add(t);
-        }
-        return a;
-    }
-
-    private static String currentText(Card c) {
-        return clean(c.getAbilityText());
-    }
-
-    /** True when an effect currently changes the card's abilities, keywords, types or colours (layers 3-6), so its printed text is no longer the whole story. */
-    private static boolean isModified(Card c) {
-        return !c.getChangedCardTraits().isEmpty() || !c.getChangedCardTraitsByText().isEmpty()
-                || !c.getChangedCardKeywords().isEmpty() || !c.getChangedCardKeywordsByText().isEmpty()
-                || c.getChangedCardTypes().iterator().hasNext() || c.hasChangedCardColors();
-    }
-
     /** Plain text: no HTML from Forge's display formatting, normalized line breaks. */
-    private static String clean(String s) {
+    static String clean(String s) {
         if (s == null) return "";
-        return s.replaceAll("<[^>]+>", "").replace("\r\n", "\n").replaceAll("\n{2,}", "\n").trim();
+        return s.replaceAll("<[^>]+>", "")
+                .replaceAll(" ?\\[(Zone Changer|Phase|Removed from|Added to)[^\\]]*\\]", "") // Forge's internal trigger bookkeeping
+                .replace("\r\n", "\n").replaceAll("\n{2,}", "\n").trim();
     }
 
     private static JsonArray cards(Iterable<Card> cs, Player viewer) {
@@ -209,7 +178,7 @@ public final class StateView {
                 JsonObject e = new JsonObject();
                 e.addProperty("controller", label(viewer, si.getSpellAbility().getActivatingPlayer()));
                 e.addProperty("source", si.getSpellAbility().getHostCard() != null ? si.getSpellAbility().getHostCard().getName() : "?");
-                e.addProperty("description", si.getStackDescription());
+                e.addProperty("description", clean(StackItemView.get(si).getText()));
                 JsonArray tg = targets(si.getSpellAbility(), viewer);
                 if (tg.size() > 0) e.add("targets", tg);
                 st.add(e);
@@ -234,7 +203,7 @@ public final class StateView {
         List<GameLogEntry> entries = game.getGameLog().getLogEntriesForTypes(PUBLIC_LOG);
         // Forge returns newest first; keep the 15 most recent in chronological order.
         int n = Math.min(15, entries.size());
-        for (int i = n - 1; i >= 0; i--) log.add(entries.get(i).message());
+        for (int i = n - 1; i >= 0; i--) log.add(clean(entries.get(i).message()));
         s.add("recentLog", log);
         return s;
     }

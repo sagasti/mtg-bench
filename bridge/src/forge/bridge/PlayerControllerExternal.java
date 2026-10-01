@@ -604,8 +604,12 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         if (opts.isEmpty() || max <= 0) return min == 0;
         JsonObject extra = new JsonObject();
         extra.addProperty("casting", host != null ? host.getName() : "?");
-        extra.addProperty("abilityText", truncate(cur.getDescription(), 300));
-        List<String> r = ask("targets", "Choose target(s) for " + (host != null ? host.getName() : "this ability") + ": " + truncate(cur.getDescription(), 200),
+        // Same wording Forge shows a human (InputSelectTargets): the ability, inheriting the parent's text for sub-abilities, then what to select.
+        String abilityText = StateView.clean(cur.toString());
+        if (abilityText.isEmpty()) abilityText = StateView.clean(cur.getRootAbility().toString());
+        extra.addProperty("abilityText", truncate(abilityText, 300));
+        List<String> r = ask("targets", "Choose target(s) for " + (host != null ? host.getName() : "this ability") + ": " + truncate(abilityText, 200)
+                        + (tr.getVTSelection() != null && !tr.getVTSelection().isEmpty() ? " (" + tr.getVTSelection() + ")" : ""),
                 opts, Math.min(min, max), max, extra, null);
         if (castCancelled()) return false;
         if (r == null) { delegated("targets", "no valid answer"); return asAi(() -> super.chooseTargetsFor(cur)); }

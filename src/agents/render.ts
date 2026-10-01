@@ -8,17 +8,25 @@ import type { DecisionRequest, Phase } from "../types.ts";
 
 const CARD_KEYS = new Set(["name", "card", "cards", "picks", "pool", "pack", "seen", "hand", "deck"]);
 
-/** Collect every card name mentioned in state/options so we can attach oracle text. */
+/**
+ * Collect every card name mentioned in state/options so we can attach oracle text. Objects that carry their own
+ * `text` (permanents and tokens: Forge's current card-detail text) are already fully described, so they're skipped.
+ */
 export function collectCardNames(req: DecisionRequest, db: CardDb): string[] {
   const names = new Set<string>();
+  const described = new Set<string>();
   const visit = (v: unknown, key?: string) => {
     if (typeof v === "string") { if (key && CARD_KEYS.has(key) && getCard(db, v)) names.add(getCard(db, v)!.name); return; }
     if (Array.isArray(v)) { for (const x of v) visit(x, key); return; }
-    if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) visit(x, k);
+    if (v && typeof v === "object") {
+      const o = v as Record<string, unknown>;
+      if (typeof o.text === "string" && typeof o.name === "string") { described.add(o.name); return; }
+      for (const [k, x] of Object.entries(o)) visit(x, k);
+    }
   };
   visit(req.state);
   for (const o of req.options) if (o.card && getCard(db, o.card)) names.add(getCard(db, o.card)!.name);
-  return [...names].sort();
+  return [...names].filter((n) => !described.has(n)).sort();
 }
 
 export function renderRequest(req: DecisionRequest, event: EventConfig, db: CardDb, notes?: string): string {
