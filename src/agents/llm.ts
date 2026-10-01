@@ -7,6 +7,7 @@ import { type KnowledgeBase, studyTools, toolsForTier } from "../knowledge/tools
 import { type DecisionRequest, type DecisionResponse, type DecideContext, validateResponse } from "../types.ts";
 import type { AgentResult, CallObserver, DecisionAgent } from "./agent.ts";
 import type { ChatMessage, Provider } from "./providers/types.ts";
+import type { Jsonl } from "../util/log.ts";
 import { renderRequest, systemPrompt } from "./render.ts";
 
 export class LlmAgent implements DecisionAgent {
@@ -19,6 +20,8 @@ export class LlmAgent implements DecisionAgent {
     private cubeName: string,
     private db: CardDb,
     private kb: KnowledgeBase,
+    /** When set, every rendered decision prompt is appended here (event.recordPrompts). */
+    private promptLog?: Jsonl,
   ) { this.kind = seat.provider; }
 
   get model() { return this.provider.model; }
@@ -33,6 +36,7 @@ export class LlmAgent implements DecisionAgent {
     const tools = toolsForTier(this.event.knowledge);
     const first = renderRequest(req, this.event, this.db, ctx.notes);
     assertNoLeak(system + "\n" + first, [this.cubeName, this.event.name]);
+    this.promptLog?.write({ seat: this.seat.id, matchId: ctx.matchId, game: ctx.game, kind: req.kind, requestId: req.requestId, prompt: first });
     const messages: ChatMessage[] = [{ role: "user", content: first }];
     const signal = AbortSignal.timeout(this.event.decisionTimeoutSec * 1000);
     let usage: TokenUsage = { ...ZERO_USAGE };
