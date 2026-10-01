@@ -13,7 +13,12 @@ import forge.game.GameLogEntry;
 import forge.game.GameLogEntryType;
 import forge.game.card.Card;
 import forge.game.card.CardCollectionView;
+import forge.card.MagicColor;
 import forge.game.card.CounterType;
+import forge.game.keyword.KeywordInterface;
+import forge.game.mana.ManaPool;
+import forge.game.spellability.SpellAbility;
+import forge.game.spellability.TargetChoices;
 import forge.game.combat.Combat;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbilityStackInstance;
@@ -46,18 +51,29 @@ public final class StateView {
         o.addProperty("id", id(c));
         boolean hidden = c.isFaceDown() && !c.getController().equals(viewer) && !includeHiddenName;
         o.addProperty("name", hidden ? "face-down card" : c.getName());
-        if (c.isToken()) {
-            o.addProperty("token", true);
+        if (c.isFaceDown() && !hidden) o.addProperty("faceDown", true);
+        if (c.isToken()) o.addProperty("token", true);
+        boolean onField = c.isInZone(ZoneType.Battlefield);
+        if (onField || c.isToken()) {
+            // Current characteristics, after every continuous effect: what the rules engine is using right now.
             o.addProperty("types", c.getType().toString());
-            String text = c.getOracleText();
-            if (text != null && !text.isEmpty()) o.addProperty("text", text);
+            o.addProperty("colors", colors(c));
+            if (!hidden) {
+                JsonArray kws = keywords(c);
+                if (kws.size() > 0) o.add("keywords", kws);
+                String text = currentText(c);
+                if (!text.isEmpty() && (c.isToken() || isModified(c))) o.addProperty("text", text);
+            }
         }
         if (c.isCreature()) {
             o.addProperty("pt", c.getNetPower() + "/" + c.getNetToughness());
+            if (onField && (c.getNetPower() != c.getBasePower() || c.getNetToughness() != c.getBaseToughness()))
+                o.addProperty("basePt", c.getBasePower() + "/" + c.getBaseToughness());
             if (c.getDamage() > 0) o.addProperty("damage", c.getDamage());
-            if (c.isSick() && c.getController().equals(viewer)) o.addProperty("summoningSick", true);
+            if (onField && c.isSick() && c.getController().equals(viewer)) o.addProperty("summoningSick", true);
         }
         if (c.isTapped()) o.addProperty("tapped", true);
+        if (c.isPhasedOut()) o.addProperty("phasedOut", true);
         Multiset<CounterType> counters = c.getCounters();
         if (counters != null && !counters.isEmpty()) {
             JsonObject co = new JsonObject();
@@ -66,8 +82,45 @@ public final class StateView {
         }
         Card attachedTo = c.getAttachedTo();
         if (attachedTo != null) o.addProperty("attachedTo", id(attachedTo));
+        CardCollectionView attached = c.getAttachedCards();
+        if (attached != null && !attached.isEmpty()) {
+            JsonArray at = new JsonArray();
+            for (Card a : attached) at.add(id(a));
+            o.add("attachments", at);
+        }
         if (!c.getController().equals(c.getOwner())) o.addProperty("owner", label(viewer, c.getOwner()));
         return o;
+    }
+
+    private static String colors(Card c) {
+        String s = c.getColor().toString();
+        return s == null || s.isEmpty() ? "colorless" : s;
+    }
+
+    private static JsonArray keywords(Card c) {
+        JsonArray a = new JsonArray();
+        for (KeywordInterface k : c.getKeywords()) {
+            String t = k.getTitle();
+            if (t != null && !t.isEmpty()) a.add(t);
+        }
+        return a;
+    }
+
+    private static String currentText(Card c) {
+        return clean(c.getAbilityText());
+    }
+
+    /** True when an effect currently changes the card's abilities, keywords, types or colours (layers 3-6), so its printed text is no longer the whole story. */
+    private static boolean isModified(Card c) {
+        return !c.getChangedCardTraits().isEmpty() || !c.getChangedCardTraitsByText().isEmpty()
+                || !c.getChangedCardKeywords().isEmpty() || !c.getChangedCardKeywordsByText().isEmpty()
+                || c.getChangedCardTypes().iterator().hasNext() || c.hasChangedCardColors();
+    }
+
+    /** Plain text: no HTML from Forge's display formatting, normalized line breaks. */
+    private static String clean(String s) {
+        if (s == null) return "";
+        return s.replaceAll("<[^>]+>", "").replace("\r\n", "\n").replaceAll("\n{2,}", "\n").trim();
     }
 
     private static JsonArray cards(Iterable<Card> cs, Player viewer) {
@@ -94,11 +147,48 @@ public final class StateView {
         } else {
             o.addProperty("handSize", p.getCardsIn(ZoneType.Hand).size());
         }
+        ManaPool pool = p.getManaPool();
+        if (pool.totalMana() > 0) {
+            JsonObject mp = new JsonObject();
+            String[] names = {"W", "U", "B", "R", "G", "C"};
+            byte[] cols = {MagicColor.WHITE, MagicColor.BLUE, MagicColor.BLACK, MagicColor.RED, MagicColor.GREEN, MagicColor.COLORLESS};
+            for (int i = 0; i < cols.length; i++) {
+                int n = pool.getAmountOfColor(cols[i]);
+                if (n > 0) mp.addProperty(names[i], n);
+            }
+            o.add("manaPool", mp);
+        }
+        Multiset<CounterType> pc = p.getCounters();
+        if (pc != null && !pc.isEmpty()) {
+            JsonObject co = new JsonObject();
+            for (Multiset.Entry<CounterType> e : pc.entrySet()) co.addProperty(e.getElement().toString(), e.getCount());
+            o.add("counters", co);
+        }
+        JsonArray pk = new JsonArray();
+        for (KeywordInterface k : p.getKeywords()) {
+            String t = k.getTitle();
+            if (t != null && !t.isEmpty()) pk.add(t);
+        }
+        if (pk.size() > 0) o.add("keywords", pk);
+        if (p.isMonarch()) o.addProperty("monarch", true);
+        CardCollectionView command = p.getCardsIn(ZoneType.Command);
+        if (!command.isEmpty()) o.add("command", cards(command, viewer));
         o.add("battlefield", cards(p.getCardsIn(ZoneType.Battlefield), viewer));
         o.add("graveyard", names(p.getCardsIn(ZoneType.Graveyard), viewer));
         CardCollectionView exile = p.getCardsIn(ZoneType.Exile);
         if (!exile.isEmpty()) o.add("exile", names(exile, viewer));
         return o;
+    }
+
+    /** Targets of a stack object and its sub-abilities: card ids, "you"/"opponent", or "spell: <source>". */
+    private static JsonArray targets(SpellAbility sa, Player viewer) {
+        JsonArray a = new JsonArray();
+        for (TargetChoices tc : sa.getAllTargetChoices()) {
+            for (Card c : tc.getTargetCards()) a.add(id(c));
+            for (Player p : tc.getTargetPlayers()) a.add(label(viewer, p));
+            for (SpellAbility t : tc.getTargetSpells()) a.add("spell: " + (t.getHostCard() != null ? t.getHostCard().getName() : "?"));
+        }
+        return a;
     }
 
     public static JsonObject build(Game game, Player viewer, int gameNo) {
@@ -120,6 +210,8 @@ public final class StateView {
                 e.addProperty("controller", label(viewer, si.getSpellAbility().getActivatingPlayer()));
                 e.addProperty("source", si.getSpellAbility().getHostCard() != null ? si.getSpellAbility().getHostCard().getName() : "?");
                 e.addProperty("description", si.getStackDescription());
+                JsonArray tg = targets(si.getSpellAbility(), viewer);
+                if (tg.size() > 0) e.add("targets", tg);
                 st.add(e);
             }
             s.add("stack", st); // top of stack first
