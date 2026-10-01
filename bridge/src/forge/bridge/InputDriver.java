@@ -11,7 +11,10 @@ import java.util.concurrent.TimeUnit;
 
 import com.google.gson.JsonObject;
 
+import forge.ai.ComputerUtilCost;
 import forge.game.Game;
+import forge.game.mana.ManaCostBeingPaid;
+import forge.game.spellability.SpellAbility;
 import forge.game.card.Card;
 import forge.game.card.CardView;
 import forge.game.player.Player;
@@ -124,6 +127,7 @@ final class InputDriver implements Observer, Runnable {
                 String act;
                 try { act = in.getActivateAction(c); } catch (RuntimeException e) { act = null; }
                 if (act == null) continue;
+                if (in instanceof InputPassPriority && !playableNow(c)) continue; // offered by the human UI even when unaffordable
                 String who = c.getController().equals(ch.player) ? "your " : "opponent's ";
                 String zone = c.getZone() != null && c.getZone().getZoneType() != ZoneType.Battlefield ? " [" + c.getZone().getZoneType() + "]" : "";
                 opts.add(new PlayerControllerExternal.Opt(StateView.id(c), act + ": " + who + c.getName() + (c.isCreature() ? " " + c.getNetPower() + "/" + c.getNetToughness() : "")
@@ -163,16 +167,21 @@ final class InputDriver implements Observer, Runnable {
                 continue;
             }
             if (in instanceof InputPayMana) {
-                List<String> r = ch.ask("mana_payment", prompt + "\nChoose every mana source to tap for this cost at once, or a button.", opts, 1, opts.size(), null);
-                List<String> picks = r == null || r.isEmpty() ? List.of(gui.cancelEnabled ? "cancel" : "ok") : r;
-                String button = null;
-                for (String id : picks) {
-                    if (id.equals("ok") || id.equals("cancel")) { button = id; continue; }
+                List<PlayerControllerExternal.Opt> sources = new ArrayList<>();
+                java.util.Set<String> kinds = new java.util.HashSet<>();
+                for (PlayerControllerExternal.Opt o : opts) if (o.id.matches("c\\d+")) { sources.add(o); kinds.add(o.card); }
+                int need = remainingMana(in);
+                // Forge enables Auto only when the cost can be paid. Unpayable: cancel (the cast rolls back).
+                // Every legal payment taps the same kind of source: let Auto pay. Otherwise the agent picks the sources.
+                if (!gui.okEnabled) { onEdt(() -> click(gui.cancelEnabled ? "cancel" : "ok", game)); continue; }
+                if (sources.size() <= need || kinds.size() <= 1) { onEdt(() -> click("ok", game)); continue; }
+                List<String> r = ch.ask("mana_payment", prompt + "\nChoose the mana sources to tap for this cost: " + need
+                        + " mana in total, so pick at least " + need + " source(s).", sources, Math.min(need, sources.size()), sources.size(), null);
+                for (String id : r == null ? List.<String>of() : r) {
                     if (!current(in)) break;
                     final String pick = id;
                     onEdt(() -> click(pick, game));
                 }
-                if (button != null && current(in)) { final String b = button; onEdt(() -> click(b, game)); }
                 continue;
             }
 
@@ -188,6 +197,32 @@ final class InputDriver implements Observer, Runnable {
             }
             final String pick = choice;
             onEdt(() -> click(pick, game));
+        }
+    }
+
+    /** Something on this card can be done right now: a land drop, or a non-mana ability that is playable and affordable. */
+    private boolean playableNow(Card c) {
+        try {
+            for (SpellAbility sa : c.getAllPossibleAbilities(ch.player, true)) {
+                if (sa.isManaAbility()) continue;
+                if (sa.isLandAbility()) { if (ch.player.canPlayLand(c, false, sa)) return true; continue; }
+                if (ComputerUtilCost.canPayCost(sa, ch.player, false)) return true;
+            }
+        } catch (RuntimeException e) {
+            return true; // can't probe it: offer it and let Forge decide
+        }
+        return false;
+    }
+
+    /** Mana still owed by this payment input (InputPayMana.manaCost is protected). */
+    private static int remainingMana(Input in) {
+        try {
+            java.lang.reflect.Field f = InputPayMana.class.getDeclaredField("manaCost");
+            f.setAccessible(true);
+            ManaCostBeingPaid m = (ManaCostBeingPaid) f.get(in);
+            return m == null ? 1 : Math.max(1, m.getConvertedManaCost());
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return 1;
         }
     }
 

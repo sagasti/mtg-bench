@@ -47,8 +47,24 @@ DeepSeek won 3 of 4 human-path games. A random bot also completes games on this 
 4. **Bots:** `rank-bot` reads option tags (spell/land/pass, blocker survives...) that this path doesn't produce;
    they would need recomputing here. `random` works.
 
+## Update: mitigations 1 and 2 implemented (same day)
+- **Priority** offers a card only if something on it is playable and affordable right now (Forge's `canPlay`,
+  `canPlayLand`, `ComputerUtilCost.canPayCost`); with nothing playable, the existing auto-pass applies.
+- **Mana**: unpayable cost (Forge disables Auto) -> cancel, so the cast rolls back; every legal payment taps the same
+  kind of source -> Forge's Auto pays; otherwise the agent picks sources, at least as many as the remaining cost
+  (`InputPayMana.manaCost`, read by reflection).
+
+| | Old path | Human path, first spike | Human path, mitigated |
+|---|---|---|---|
+| Decisions / game | 48 | 165 | **49** |
+| Cost / game | $0.0075 | $0.025 | **$0.0071** |
+| Minutes / game | 5.7 | 17.2 | **5.1** |
+| Invalid answers / 100 | 2.5 | 4.2 | **1.0** |
+Two DeepSeek games (both won), 0 invalid mana answers, delegations only the 2 placeholder damage assignments.
+The random bot now casts spells on this path (it never did before the mitigations). Small sample.
+
 ## Recommendation
-Go, conditionally: the approach works and removes the hand-written rules layer, but at about 3x the decisions and
-cost. Implement mitigations 1 and 2 and re-measure; switch the default only if decisions/game come within roughly
-1.5x of the old path. Then implement item 3 properly, rebuild bot tags (item 4), and remove PlayerControllerExternal
-and AgentCostDecision.
+Go. With mitigations 1 and 2 the human path matches the old path on decisions, cost and time per game, with
+fewer invalid answers, no hand-written legality layer, and Forge's own prompts. Remaining before it becomes the
+default: replace the spike defaults with real decisions (item 3), rebuild bot tags (item 4), validate on a larger
+sample (a full bots event plus several DeepSeek matches), then remove PlayerControllerExternal and AgentCostDecision.
