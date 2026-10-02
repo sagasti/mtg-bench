@@ -51,3 +51,4 @@ One file per ticket. Status: open | in progress | done | dropped.
 | [MB-045](MB-045.md) | An unbounded number prompt floods the harness until it runs out of heap | high | done |
 | [MB-046](MB-046.md) | An unbreakable loop runs until the match timeout | medium | done |
 | [MB-047](MB-047.md) | rank-bot accepts pointless optional copies | medium | done |
+| [MB-048](MB-048.md) | Rendering Ertai Resurrected's rules text crashes the input driver | medium | done |

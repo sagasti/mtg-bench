@@ -1,0 +1,13 @@
+{
+  "seatId": "animate",
+  "main": [
+    "Animate Dead", "Animate Dead", "Animate Dead", "Animate Dead", "Animate Dead", "Animate Dead",
+    "Zombify", "Zombify",
+    "Doom Blade", "Doom Blade", "Murder", "Murder", "Go for the Throat", "Go for the Throat", "Cast Down", "Cast Down",
+    "Child of Night", "Child of Night", "Gravedigger", "Gravedigger", "Walking Corpse", "Walking Corpse", "Vampire Nighthawk",
+    "Swamp", "Swamp", "Swamp", "Swamp", "Swamp", "Swamp", "Swamp", "Swamp", "Swamp",
+    "Swamp", "Swamp", "Swamp", "Swamp", "Swamp", "Swamp", "Swamp", "Swamp"
+  ],
+  "sideboard": [],
+  "basics": { "Swamp": 17 }
+}

@@ -68,6 +68,7 @@ export class ForgeEngine implements GameEngine {
     const delegations: Delegation[] = [];
     const forfeits: Delegation[] = [];
     const auto: AutoAction[] = [];
+    const warnings = new Map<string, number>();
     const decisions: [number, number] = [0, 0];
     let current: { game: number; onThePlay: 0 | 1; t0: number } | null = null;
     const logDir = path.join(spec.runDir, "forge-logs");
@@ -92,7 +93,8 @@ export class ForgeEngine implements GameEngine {
         const w0 = games.filter((g) => g.winner === 0).length, w1 = games.filter((g) => g.winner === 1).length;
         // An abandoned match has no winner, whatever the score when it stopped (its games stay in `games` for the record).
         resolve({ matchId: spec.matchId, pod: spec.pod, round: spec.round, seats: [spec.seats[0].id, spec.seats[1].id], games,
-          winner: error ? null : w0 > w1 ? 0 : w1 > w0 ? 1 : null, delegations, forfeits, auto, engineErrors, error, ...(error ? { errorKind } : {}) });
+          winner: error ? null : w0 > w1 ? 0 : w1 > w0 ? 1 : null, delegations, forfeits, auto, engineErrors,
+          ...(warnings.size ? { warnings: [...warnings].map(([msg, count]) => ({ msg, count })) } : {}), error, ...(error ? { errorKind } : {}) });
       };
       // Provider failures are infrastructure; anything else thrown while answering is a bug in the harness.
       const abandon = (e: any) => finish(`${e instanceof InfraError ? "infrastructure error" : "harness error"}: ${e?.message ?? e}`, e instanceof InfraError ? "infra" : "harness");
@@ -171,6 +173,10 @@ export class ForgeEngine implements GameEngine {
               break;
             case "match_end": finish(); break;
             case "error": fs.writeSync(logFile, `[bridge error] ${msg.msg}\n`); break;
+            case "warning":
+              fs.writeSync(logFile, `[bridge warning] ${msg.msg}\n`);
+              warnings.set(msg.msg, (warnings.get(msg.msg) ?? 0) + 1);
+              break;
             case "log": debug(`[forge ${spec.matchId}] ${msg.msg}`); break;
           }
         });

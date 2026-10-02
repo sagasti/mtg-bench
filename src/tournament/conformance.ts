@@ -32,6 +32,8 @@ const FIXTURES: { id: string; seats: [ProviderName, ProviderName]; decks: [strin
   { id: "random-vs-rank", seats: ["random", "rank-bot"], decks: ["deck-c", "deck-d"] },
   { id: "rank-vs-rank", seats: ["rank-bot", "rank-bot"], decks: ["deck-b", "deck-c"] },
   { id: "rank-vs-forge-ai", seats: ["rank-bot", "forge-ai"], decks: ["deck-d", "deck-a"] },
+  // Regression (MB-048): Animate Dead on the opponent's Ertai Resurrected made Forge's rules-text renderer throw.
+  { id: "animate-vs-ertai", seats: ["rank-bot", "rank-bot"], decks: ["deck-animate", "deck-ertai"] },
 ];
 /** Event settings are fixed here, not taken from the config, so every check plays the same matches. */
 const SETTINGS = { seed: 1, gamesPerMatch: 3, maxGameTurns: 40, maxRetries: 3, priorityStops: "smart", manaPayment: "smart" } as const;
@@ -43,6 +45,7 @@ export interface MatchSignature {
   endReasons: string[];                  // kinds of game end seen, e.g. "AllOpponentsLost", "Draw"
   engineExceptions: number;
   bridgeErrors: number;                  // "[bridge error]" lines in the Forge log
+  bridgeWarnings?: number;               // workarounds the bridge reported (shown, not compared: random streams move them)
   decisions: Record<string, number>;     // "<seat 0|1>:<kind>" -> decisions asked (all rows, forced and re-asks included)
   forfeits: number;
   delegations: number;
@@ -105,6 +108,7 @@ export async function runConformance(cfg: BenchConfig, engine: GameEngine, opts:
       endReasons: [...new Set(m.games.map((g) => g.reason.split(/[:(]/)[0].trim()))].sort(),
       engineExceptions: m.engineErrors?.length ?? 0,
       bridgeErrors: fs.existsSync(log) ? (fs.readFileSync(log, "utf8").match(/^\[bridge error\]/gm) ?? []).length : 0,
+      bridgeWarnings: (m.warnings ?? []).reduce((a, w) => a + w.count, 0),
       decisions: Object.fromEntries(Object.entries(counts).sort()),
       forfeits: m.forfeits?.length ?? 0,
       delegations: m.delegations?.length ?? 0,

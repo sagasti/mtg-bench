@@ -253,8 +253,11 @@ export function summarize(runDirs: string[], cfg?: BenchConfig, opts: { maxFailu
     if (m.engineErrors?.length) matchesWithEngineErrors++;
     for (const e of m.engineErrors ?? []) add(engineErrors, `${e.kind} at ${e.at || "?"}`);
   }
+  // Things the bridge worked around without breaking a decision (a card text Forge couldn't render...), by message.
+  const warnings = new Map<string, number>();
+  for (const m of matches) for (const w of m.warnings ?? []) warnings.set(w.msg, (warnings.get(w.msg) ?? 0) + w.count);
 
-  return { incomplete, versions, specViolations, decisions, calls, unrecorded, matches, bySeat, bySeatPhase, byKind, ratings, byPod, merged: runDirs.length > 1, excluded, maxFailureRate, cappedDraws, loopDraws, censored, overBudget, notPlayed, games, reasons, delegated, forfeited, provenance, engineErrors, matchesWithEngineErrors, playWinRate: decided.length ? playWins / decided.length : null, pricing };
+  return { incomplete, versions, specViolations, decisions, calls, unrecorded, matches, bySeat, bySeatPhase, byKind, ratings, byPod, merged: runDirs.length > 1, excluded, maxFailureRate, cappedDraws, loopDraws, censored, overBudget, notPlayed, games, reasons, delegated, forfeited, provenance, engineErrors, matchesWithEngineErrors, warnings, playWinRate: decided.length ? playWins / decided.length : null, pricing };
 }
 
 export function renderReport(s: ReturnType<typeof summarize>, title: string): string {
@@ -378,6 +381,13 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
     L.push("", "Matches: " + s.matches.filter((m) => m.engineErrors?.length).map((m) => `${m.matchId} (${m.engineErrors!.length})`).join(", "), "");
   }
 
+  if (s.warnings.size) {
+    L.push("## Bridge warnings", "", "Things the bridge worked around without breaking a decision, each counted once per game; that decision went ahead with less information.", "");
+    L.push("| Games | Warning |", "|---|---|");
+    for (const [k, v] of [...s.warnings.entries()].sort((a, b) => b[1] - a[1])) L.push(`| ${v} | ${k} |`);
+    L.push("");
+  }
+
   L.push("## Who made each in-game decision", "");
   if (!s.provenance.size) L.push("No in-game decisions recorded.", "");
   else {
@@ -466,6 +476,7 @@ export function writeReport(runDir: string, cfg?: BenchConfig) {
     delegated: Object.fromEntries([...s.delegated.entries()].map(([k, m]) => [k, Object.fromEntries(m)])),
     forfeited: Object.fromEntries([...s.forfeited.entries()].map(([k, m]) => [k, Object.fromEntries(m)])),
     engineErrors: { matches: s.matchesWithEngineErrors, byKind: Object.fromEntries(s.engineErrors) },
+    warnings: s.warnings.size ? Object.fromEntries(s.warnings) : undefined,
     provenance: Object.fromEntries([...s.provenance.entries()].map(([k, p]) => [k, { agent: p.agent, forced: Object.fromEntries(p.forced), policy: Object.fromEntries(p.policy), delegated: Object.fromEntries(p.delegated), forfeit: Object.fromEntries(p.forfeit) }])),
   };
   fs.writeFileSync(path.join(runDir, "summary.json"), JSON.stringify(json, null, 2));

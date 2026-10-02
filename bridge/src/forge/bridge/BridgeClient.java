@@ -77,6 +77,14 @@ public final class BridgeClient implements Closeable {
         send(o);
     }
 
+    /** Something the bridge worked around without breaking the decision (the harness counts it per match and reports it). */
+    public void warn(String text) {
+        JsonObject o = new JsonObject();
+        o.addProperty("type", "warning");
+        o.addProperty("msg", text);
+        send(o);
+    }
+
     public void error(String text) {
         JsonObject o = new JsonObject();
         o.addProperty("type", "error");

@@ -59,6 +59,8 @@ export interface MatchResult {
   auto?: AutoAction[];
   /** Exceptions Forge logged mid-game (the match still completed). Any count > 0 makes the match suspect. */
   engineErrors?: EngineError[];
+  /** Things the bridge worked around without breaking a decision (e.g. a card text Forge couldn't render), by message. */
+  warnings?: { msg: string; count: number }[];
   /** Set when the match was abandoned (timeout, bridge crash, provider outage); the match is then censored from standings and ratings. */
   error?: string;
   /** What kind of failure `error` is. Every kind but "harness" (a bug in our code) is replayed once (tournament/run.ts). */

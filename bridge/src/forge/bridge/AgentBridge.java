@@ -46,6 +46,7 @@ public final class AgentBridge {
         for (int i = 0; i + 1 < args.length; i += 2) a.put(args[i].replaceFirst("^--", ""), args[i + 1]);
 
         BridgeClient client = new BridgeClient(Integer.parseInt(a.get("port")), a.get("token"));
+        StateView.warnings = client;
         int exit = 0;
         try {
             GuiBase.setInterface(new GuiDesktop());

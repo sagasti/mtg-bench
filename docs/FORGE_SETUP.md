@@ -45,7 +45,7 @@ If it doesn't compile, the Forge version probably differs from the source I chec
 
 ### Conformance check: run after any Forge bump or bridge change
 
-Compiling isn't enough: the bridge reads Forge fields by reflection and keys off prompt and button text, so a new Forge can break it silently. `bench conformance` plays four bot-only matches (rank-bot, random, forge-ai; best-of-3) with the fixed decks in `conformance/decks/` and fixed seeds, about a minute with two JVMs, and compares them with `conformance/baseline.forge.json`:
+Compiling isn't enough: the bridge reads Forge fields by reflection and keys off prompt and button text, so a new Forge can break it silently. `bench conformance` plays five bot-only matches (rank-bot, random, forge-ai; best-of-3; the fifth, `animate-vs-ertai`, is a regression for MB-048) with the fixed decks in `conformance/decks/` and fixed seeds, about a minute with two JVMs, and compares them with `conformance/baseline.forge.json`:
 
 ```bash
 npm run bench -- conformance config/forge-bots.yaml            # engine settings (forgeDir, java) come from the config; event settings are fixed

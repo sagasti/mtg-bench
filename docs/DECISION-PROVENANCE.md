@@ -30,6 +30,9 @@ under `provenance`.
 - `matches.jsonl`: per match, `auto[]` (forced and policy actions taken by the bridge, counted per game, with reason),
   `delegations[]` (delegated, with reason) and `forfeits[]` (forfeits detected by the bridge, with reason).
 - `report.md` / `summary.json`: the combined table and breakdown.
+- `matches.jsonl` `warnings[]`: things the bridge worked around without breaking a decision (a card's rules text
+  Forge couldn't render, so its printed Oracle text was shown), counted once per game; report.md "Bridge warnings".
+  Not decisions, but that decision went ahead with less information.
 - `matches.jsonl` also carries `engineErrors[]`: exceptions Forge logged mid-game and carried on from. Not a decision
   source, but a match with any is suspect (its state may have been corrupt from that point), and `report.md` lists them
   under "Engine exceptions".
