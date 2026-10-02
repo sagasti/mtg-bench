@@ -66,7 +66,7 @@ Per-match Forge logs are in `runs/<run>/forge-logs/<matchId>.log`. Add `--verbos
 |---|---|
 | `bridge exited with code 1` right away | Forge couldn't find `res/`: `forgeDir` must be the folder containing `res/` (release) or the repo root (source). |
 | Error loading decks | A card name mismatch between the cube list and Forge. Run `check`, which lists cube cards missing from the DB. |
-| A seat's fallback rate is high | Read `decisions.jsonl` rows with `"fallback": true`; the `error` field says why (invalid ids, timeouts, API errors). |
+| A seat's fallback rate is high | Read `decisions.jsonl` rows with `"fallback": true` or `"forfeit": true`; the `error` field says why (invalid ids, malformed answers, time budget used up). Provider failures show up as API errors in `usage.jsonl` and abandoned matches, not fallbacks. |
 | Games end in `turn-cap` draws a lot | Raise `maxGameTurns`, or check whether an agent always passes (see `priority` decisions). |
 | Very slow games | `parallelMatches` × Forge JVM memory. Each match is one JVM (`-Xmx3g`); lower `parallelMatches` or `-Xmx`. |
 

@@ -8,7 +8,7 @@ seats:
     provider: anthropic        # required, see "Providers" below
     model: claude-opus-5-5     # required for LLM providers, exact API model id
     apiKeyEnv: ANTHROPIC_API_KEY   # required for LLM providers, NAME of the env var holding the key
-    maxTokens: 4096            # optional, max output tokens per model call (default 2048)
+    maxTokens: 4096            # optional, max output tokens per call, reasoning included (default 4096 with reasoning off, else 16384)
     temperature: 0.7           # optional (ignored when thinkingBudget is set)
     thinkingBudget: 4000       # optional, Anthropic extended thinking budget in tokens
     reasoningEffort: medium    # optional, OpenAI-style reasoning effort
@@ -16,7 +16,14 @@ seats:
     headers: { X-Foo: bar }    # optional, extra HTTP headers
     extraBody: { top_p: 0.9 }  # optional, merged into every request body (provider-specific knobs)
     label: "Opus (thinking)"   # optional, display name
+    concurrency: 2             # optional, max model calls in flight for this seat (rate-limit guard; default no limit)
 ```
+
+**Reasoning and host are part of the seat's spec.** Reasoning counts as disabled when `extraBody.reasoning` has
+`enabled: false`, `max_tokens: 0` or `effort: "none"` (or `reasoningEffort: none`, or Anthropic without
+`thinkingBudget`). Every call is checked: reasoning tokens on a seat with reasoning disabled, or a `servedBy` host
+outside a pinned `extraBody.provider.order` with `allow_fallbacks: false`, logs a warning (once per seat) and marks the
+call and its decision with `specViolation`. `check --ping` runs the same check on one call per seat.
 
 ## API keys
 
@@ -67,9 +74,9 @@ There are two kinds of substitution, and both are reported:
 - **Fallback** (harness): the model didn't produce a valid answer, so `rank-bot`'s choice is used. It's shown per seat in the report's reliability table.
 - **Delegated** (Forge): Forge's own AI decided, either because the answer was rejected inside the engine (e.g. an illegal block) or because it's one of the few decision types not yet offered to agents. It's shown in its own report section.
 
-Per decision the harness validates the answer. An illegal answer is sent back with the reason ("unknown option id …") and the agent may try again, up to `maxRetries`. After that, or on an API error or timeout, the seat's fallback plays the `rank-bot` choice. Every fallback is logged, and the fallback rate appears per seat in the report. A seat with a high fallback rate isn't really being measured, so check it before trusting a rating.
+Per decision the harness validates the answer. An illegal answer (including a malformed `choice` or unparseable tool arguments) is sent back with the reason ("unknown option id …") and the agent may try again, up to `maxRetries`. After that, or when the decision's time budget (`decisionTimeoutSec`) runs out, the decision is forfeited: the null action in games, `rank-bot`'s deck in deckbuilding. The decision row keeps the reason in `error`.
 
-API errors 429, 408, 529 and 5xx are retried with exponential backoff, honouring `Retry-After`.
+The time budget works like a chess clock: it counts the model's time only. Provider failures are not the agent's: 429, 408, 529, 5xx, network errors and in-body errors (HTTP 200 with `finish_reason: "error"`, or an empty answer with no output tokens) are retried with exponential backoff, honouring `Retry-After` (capped at 60 s); the clock is paused while backing off and doesn't count failed attempts. A provider that keeps failing abandons the match as an infrastructure error. An answer cut off by the output cap (`length` / `max_tokens`) is asked again once with twice the cap (up to 32768) and marked `truncated`. An exception inside the harness (rendering, templates, the prompt-leak guard) abandons the match as a harness error rather than counting as a forfeit.
 
 ## Cost planning
 
