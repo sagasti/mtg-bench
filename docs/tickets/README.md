@@ -9,7 +9,7 @@ One file per ticket. Status: open | in progress | done | dropped.
 | [MB-003](MB-003.md) | Provider errors and truncated outputs are scored as the agent's mistakes | high | open |
 | [MB-004](MB-004.md) | Seats aren't in the same reasoning regime or on pinned hosts | high | open |
 | [MB-005](MB-005.md) | The prompt misdescribes the interface; harness policies shape which decisions exist | medium | open |
-| [MB-006](MB-006.md) | Errored and timed-out matches censor long games non-randomly | medium | open |
+| [MB-006](MB-006.md) | Errored and timed-out matches censor long games non-randomly | medium | in progress |
 | [MB-007](MB-007.md) | maxGameTurns isn't enforced on the default (human) bridge | medium | open |
 | [MB-008](MB-008.md) | Same seed means same packs: runs aren't independent replicates | medium | open |
 | [MB-009](MB-009.md) | Cube contamination; bot-only computed hints; coarse decision kinds on the human path | medium | open |
@@ -20,11 +20,11 @@ One file per ticket. Status: open | in progress | done | dropped.
 | [MB-014](MB-014.md) | A decision timeout abandons the whole match as an infrastructure error | high | open |
 | [MB-015](MB-015.md) | Harness exceptions become agent forfeits, and forfeit rows drop the error | medium | open |
 | [MB-016](MB-016.md) | Malformed submit_decision calls are coerced to choice [] and accepted when min is 0 | medium | open |
-| [MB-017](MB-017.md) | Errored matches still award standings points and match-level results | medium | open |
+| [MB-017](MB-017.md) | Errored matches still award standings points and match-level results | medium | done |
 | [MB-018](MB-018.md) | Provenance inflated: match notes counted as in-game agent decisions; re-asks counted separately | medium | open |
 | [MB-019](MB-019.md) | Tokens of decisions that end in infra errors are missing from the cost tables | medium | open |
 | [MB-020](MB-020.md) | Missing prompt templates render silently as empty | low | open |
-| [MB-021](MB-021.md) | Bootstrap clusters collide when merging runs | low | open |
+| [MB-021](MB-021.md) | Bootstrap clusters collide when merging runs | low | done |
 | [MB-022](MB-022.md) | Card reference omits graveyard, exile and stack-source cards | low | open |
 | [MB-023](MB-023.md) | SeatConfig.concurrency is documented but never read | low | open |
 | [MB-024](MB-024.md) | Re-using a --run-id appends to the existing run and corrupts it | high | open |

@@ -79,8 +79,9 @@ export class ForgeEngine implements GameEngine {
         try { fs.closeSync(logFile); } catch { /* ignore */ }
         const engineErrors = scanEngineErrors(logPath, gameEnds);
         const w0 = games.filter((g) => g.winner === 0).length, w1 = games.filter((g) => g.winner === 1).length;
+        // An abandoned match has no winner, whatever the score when it stopped (its games stay in `games` for the record).
         resolve({ matchId: spec.matchId, pod: spec.pod, round: spec.round, seats: [spec.seats[0].id, spec.seats[1].id], games,
-          winner: w0 > w1 ? 0 : w1 > w0 ? 1 : null, delegations, forfeits, auto, engineErrors, error });
+          winner: error ? null : w0 > w1 ? 0 : w1 > w0 ? 1 : null, delegations, forfeits, auto, engineErrors, error });
       };
       const timer = setTimeout(() => finish(`match timeout after ${this.cfg.matchTimeoutSec ?? 7200}s`), (this.cfg.matchTimeoutSec ?? 7200) * 1000);
 

@@ -23,10 +23,10 @@ import { MockEngine } from "./engine/mock/mock.ts";
 import { SUBMIT_TOOL } from "./knowledge/tools.ts";
 import { loadRules } from "./knowledge/rules.ts";
 import { rate } from "./rating/bt.ts";
-import { outcomesFromMatches } from "./rating/outcomes.ts";
+import { outcomesFromMatches, readMatches } from "./rating/outcomes.ts";
 import { runHeadToHead } from "./tournament/match.ts";
 import { runEvent } from "./tournament/run.ts";
-import { info, loadDotEnv, readJsonl, setVerbose } from "./util/log.ts";
+import { info, loadDotEnv, setVerbose } from "./util/log.ts";
 
 loadDotEnv();
 
@@ -158,7 +158,7 @@ async function main() {
       const level = (flag(args, "level") ?? "game") as "game" | "match";
       const anchorArg = flag(args, "anchor");
       const anchor = anchorArg ? { id: anchorArg.split("=")[0], rating: Number(anchorArg.split("=")[1] ?? 1500) } : undefined;
-      const matches = dirs.flatMap((d) => readJsonl(path.join(d, "matches.jsonl")));
+      const matches = readMatches(dirs);
       for (const r of rate(outcomesFromMatches(matches, level), { bootstrap: 1000, anchor })) {
         console.log(`${r.id.padEnd(24)} ${r.rating.toFixed(0).padStart(5)}  [${r.lo.toFixed(0)}–${r.hi.toFixed(0)}]  ${r.score.toFixed(1)}/${r.games}`);
       }

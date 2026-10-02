@@ -59,7 +59,10 @@ export interface MatchResult {
   auto?: AutoAction[];
   /** Exceptions Forge logged mid-game (the match still completed). Any count > 0 makes the match suspect. */
   engineErrors?: EngineError[];
+  /** Set when the match was abandoned (timeout, bridge crash, provider outage); the match is then censored from standings and ratings. */
   error?: string;
+  /** The run the row was read from (set by readMatches), so matches of different runs never share a bootstrap cluster. */
+  runId?: string;
 }
 
 export interface GameEngine {

@@ -10,7 +10,7 @@ import type { BenchConfig, Pricing } from "../config.ts";
 import { scanEngineErrors } from "../engine/forge/log.ts";
 import type { MatchResult } from "../engine/types.ts";
 import { rate } from "../rating/bt.ts";
-import { outcomesFromMatches } from "../rating/outcomes.ts";
+import { censoredBySeat, outcomesFromMatches, readMatches } from "../rating/outcomes.ts";
 import { readJsonl } from "../util/log.ts";
 import type { CallRecord, DecisionRecord } from "./recorder.ts";
 
@@ -52,7 +52,7 @@ const reported = (a: Agg) => (a.costReportedCalls === 0 ? "n/a" : `${usd(a.repor
 export function summarize(runDirs: string[], cfg?: BenchConfig) {
   const decisions: DecisionRecord[] = runDirs.flatMap((d) => readJsonl(path.join(d, "decisions.jsonl")));
   const calls: CallRecord[] = runDirs.flatMap((d) => readJsonl(path.join(d, "usage.jsonl")));
-  const matches: MatchResult[] = runDirs.flatMap((d) => readJsonl(path.join(d, "matches.jsonl")));
+  const matches: MatchResult[] = readMatches(runDirs);
   const pricing: Record<string, Pricing> = { ...(cfg?.pricing ?? {}) };
   for (const d of runDirs) {
     const f = path.join(d, "config.json");
@@ -76,6 +76,7 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
   for (const c of calls) if (c.error) { const a = bySeat.get(c.seat); if (a) a.apiErrors++; }
 
   const ratings = rate(outcomesFromMatches(matches), { bootstrap: 500 });
+  const censored = censoredBySeat(matches);
   const games = matches.flatMap((m) => m.games);
   const reasons: Record<string, number> = {};
   for (const g of games) reasons[g.reason.split(":")[0]] = (reasons[g.reason.split(":")[0]] ?? 0) + 1;
@@ -135,7 +136,7 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
     for (const e of m.engineErrors ?? []) add(engineErrors, `${e.kind} at ${e.at || "?"}`);
   }
 
-  return { decisions, calls, matches, bySeat, bySeatPhase, byKind, ratings, games, reasons, delegated, forfeited, provenance, engineErrors, matchesWithEngineErrors, playWinRate: decided.length ? playWins / decided.length : null, pricing };
+  return { decisions, calls, matches, bySeat, bySeatPhase, byKind, ratings, censored, games, reasons, delegated, forfeited, provenance, engineErrors, matchesWithEngineErrors, playWinRate: decided.length ? playWins / decided.length : null, pricing };
 }
 
 export function renderReport(s: ReturnType<typeof summarize>, title: string): string {
@@ -147,6 +148,13 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
   L.push("| # | Seat | Rating | 95% CI | Games | Score |", "|---|---|---|---|---|---|");
   s.ratings.forEach((r, i) => L.push(`| ${i + 1} | ${r.id} | ${r.rating.toFixed(0)} | ${r.lo.toFixed(0)}–${r.hi.toFixed(0)} | ${r.games} | ${r.score.toFixed(1)} |`));
   L.push("");
+  if (s.censored.size) {
+    const n = s.matches.filter((m) => m.error).length;
+    L.push(`**Censored: ${n} match(es) ended in an error** and are left out of the ratings and standings entirely, including the games they finished (policy in docs/ANALYTICS.md). Errors cut off long matches, so a seat with many censored matches may be rated on a biased sample.`, "");
+    L.push("| Seat | Censored matches | Finished games left out |", "|---|---|---|");
+    for (const [seat, c] of [...s.censored.entries()].sort()) L.push(`| ${seat} | ${c.matches} | ${c.games} |`);
+    L.push("");
+  }
 
   L.push("## Token usage and cost by seat", "");
   L.push("| Seat | Model | Decisions (auto) | Calls | Input | Cache read | Cache write | Output | Reasoning | Tokens/decision | Cost (computed) | Cost (reported) | p50 / p95 latency |",
@@ -271,6 +279,7 @@ export function writeReport(runDir: string, cfg?: BenchConfig) {
   fs.writeFileSync(path.join(runDir, "report.md"), renderReport(s, `Run ${path.basename(runDir)}`));
   const json = {
     ratings: s.ratings,
+    censored: Object.fromEntries(s.censored),
     seats: Object.fromEntries([...s.bySeat.entries()].map(([id, a]) => [id, { ...a, latencies: undefined, p50LatencyMs: pct(a.latencies, 0.5), p95LatencyMs: pct(a.latencies, 0.95) }])),
     games: s.games.length, reasons: s.reasons, playWinRate: s.playWinRate,
     delegated: Object.fromEntries([...s.delegated.entries()].map(([k, m]) => [k, Object.fromEntries(m)])),

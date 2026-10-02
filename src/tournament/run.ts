@@ -96,6 +96,7 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
 
     const n = order.length;
     const points = new Array(n).fill(0);
+    const censored = new Array(n).fill(0); // errored matches: no points for either seat
     const played = new Set<string>();
     const nRounds = ev.format === "round-robin" ? n - 1 : ev.rounds;
     const rr = ev.format === "round-robin" ? roundRobin(n) : null;
@@ -115,16 +116,17 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
         }
         matchLog.write(res);
         const score = res.games.map((g) => (g.winner === 0 ? "W" : g.winner === 1 ? "L" : "D")).join("");
-        info(`  r${round + 1} ${order[a].id} vs ${order[b].id}: ${res.winner === 0 ? order[a].id : res.winner === 1 ? order[b].id : "draw"} (${score})${res.error ? ` ERROR ${res.error}` : ""}`);
+        info(`  r${round + 1} ${order[a].id} vs ${order[b].id}: ${res.error ? "censored" : res.winner === 0 ? order[a].id : res.winner === 1 ? order[b].id : "draw"} (${score})${res.error ? ` ERROR ${res.error}` : ""}`);
         return { res, a, b };
       });
       for (const { res, a, b } of results) {
         allMatches.push(res);
         played.add(a < b ? `${a}-${b}` : `${b}-${a}`);
-        if (res.winner === 0) points[a] += 3; else if (res.winner === 1) points[b] += 3; else { points[a] += 1; points[b] += 1; }
+        if (res.error) { censored[a]++; censored[b]++; }
+        else if (res.winner === 0) points[a] += 3; else if (res.winner === 1) points[b] += 3; else { points[a] += 1; points[b] += 1; }
       }
     }
-    recorder.event("pod_end", { pod, standings: order.map((s, i) => ({ seat: s.id, points: points[i] })).sort((x, y) => y.points - x.points) });
+    recorder.event("pod_end", { pod, standings: order.map((s, i) => ({ seat: s.id, points: points[i], ...(censored[i] ? { censored: censored[i] } : {}) })).sort((x, y) => y.points - x.points) });
   }
 
   const ratings = rate(outcomesFromMatches(allMatches), { bootstrap: 500, seed: ev.seed });

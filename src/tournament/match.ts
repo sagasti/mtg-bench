@@ -75,7 +75,7 @@ export async function runHeadToHead(cfg: BenchConfig, engine: GameEngine, opts: 
     }
     matchLog.write(res);
     const score = res.games.map((g) => (g.winner === 0 ? "W" : g.winner === 1 ? "L" : "D")).join("");
-    info(`  match ${m + 1}: ${res.winner === 0 ? seats[0].id : res.winner === 1 ? seats[1].id : "draw"} (${score})${res.error ? ` ERROR ${res.error}` : ""}`);
+    info(`  match ${m + 1}: ${res.error ? "censored" : res.winner === 0 ? seats[0].id : res.winner === 1 ? seats[1].id : "draw"} (${score})${res.error ? ` ERROR ${res.error}` : ""}`);
     return res;
   });
   recorder.event("run_end", { matches: results.length });

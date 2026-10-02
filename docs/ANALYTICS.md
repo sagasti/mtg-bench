@@ -25,9 +25,19 @@ Cost = input·price.input + output·price.output + cacheRead·price.cacheRead + 
 
 Decisions with exactly one legal answer are **auto-resolved** and never sent to a model. They're counted separately, so tokens-per-decision reflects real choices only.
 
+## Errored matches are censored
+
+A match that ends in an error (`error` set in `matches.jsonl`: match timeout, bridge crash, provider outage, harness error) is **censored**:
+
+- it has no winner (`winner: null`) and awards no Swiss/standings points to either seat (`pod_end` standings list a seat's censored matches);
+- it is left out of the ratings at both levels, **including the games it finished**. Errors cut off long matches (control decks, game 3s, the slower provider's seat), so keeping the finished games and dropping the rest would bias the sample;
+- its raw games stay in `matches.jsonl`, and `report.md` / `summary.json` list censored matches and the finished games left out, per seat.
+
+A seat with many censored matches is rated on a biased sample even so; fix the cause and re-run rather than reading its rating.
+
 ## report.md sections
 
-1. **Ratings**: Bradley-Terry fit over all games, Elo scale, 95% bootstrap CI (resampling whole matches).
+1. **Ratings**: Bradley-Terry fit over all games of uncensored matches, Elo scale, 95% bootstrap CI (resampling whole matches; a cluster is run + match id, so merged runs never share one). Censored matches per seat follow the table.
 2. **Token usage and cost by seat**: decisions, calls, each token type, tokens/decision, cost, p50/p95 decision latency.
 3. **By seat × phase**: study / draft / deckbuild / game split of tokens and cost.
 4. **By decision kind**: average tokens, invalid answers and fallbacks per kind (e.g. are blockers expensive? do models flub targets?).
