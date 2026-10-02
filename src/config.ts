@@ -34,7 +34,7 @@ export interface SeatConfig {
   /** Extra JSON merged into every request body (provider-specific knobs). */
   extraBody?: Record<string, unknown>;
   headers?: Record<string, string>;
-  /** Max concurrent in-flight requests for this seat (rate-limit guard). */
+  /** Max concurrent in-flight model calls for this seat (rate-limit guard); unset = no limit. Queue time isn't charged to the agent. */
   concurrency?: number;
   /** Per-seat overrides of event.maxToolCallsPerDecision etc. are deliberately NOT allowed: same rules for everyone. */
 }
@@ -147,6 +147,7 @@ export function validateConfig(cfg: BenchConfig) {
       errs.push(`${where}: unknown provider "${s.provider}"`);
     if (llm && !s.model) errs.push(`${where}: model is required for provider ${s.provider}`);
     if (llm && !s.apiKeyEnv && !s.baseUrl) errs.push(`${where}: apiKeyEnv is required for provider ${s.provider}`);
+    if (s.concurrency !== undefined && !(Number.isInteger(s.concurrency) && s.concurrency > 0)) errs.push(`${where}: concurrency must be a positive integer`);
     if ((s as any).apiKey) errs.push(`${where}: put the key in an env var and reference it with apiKeyEnv, not apiKey`);
   }
   if (cfg.event.packs * cfg.event.packSize * podSize > 100000) errs.push("pod is unreasonably large");

@@ -46,6 +46,26 @@ export interface Provider {
   complete(args: CompleteArgs): Promise<ModelTurn>;
 }
 
+/** At most `n` calls in flight (SeatConfig.concurrency). Time spent queued isn't charged to the agent's clock. */
+export function limitConcurrency(p: Provider, n: number): Provider {
+  let active = 0;
+  const queue: (() => void)[] = [];
+  return {
+    name: p.name,
+    model: p.model,
+    async complete(args) {
+      if (active < n) active++;
+      else {
+        args.clock?.pause();
+        await new Promise<void>((r) => queue.push(r)); // the releasing call hands its slot over
+        args.clock?.resume();
+      }
+      try { return await p.complete(args); }
+      finally { const next = queue.shift(); if (next) next(); else active--; }
+    },
+  };
+}
+
 export class ProviderError extends Error {
   constructor(msg: string, readonly status?: number, readonly retryable = false) { super(msg); }
 }
