@@ -40,10 +40,13 @@ export async function runDraft(opts: {
   const allPacks = makePacks(opts.cube, n, event.packs, event.packSize, rng);
   const pools: CardInstance[][] = seats.map(() => []);
   const picks: DraftResult["picks"] = [];
+  // Cards each seat has already passed in the current pack round: public to that seat, and the ones that may wheel.
+  let passed: string[][] = seats.map(() => []);
 
   for (let r = 0; r < event.packs; r++) {
     let packs = allPacks[r]; // packs[s] is the pack currently in front of seat s
     const dir = r % 2 === 0 ? 1 : -1; // +1 = pass left (to seat s+1)
+    passed = seats.map(() => []);
     for (let p = 0; packs.some((x) => x.length > 0); p++) {
       const chosen = await Promise.all(seats.map(async (seat, s) => {
         const pack = packs[s];
@@ -56,6 +59,7 @@ export async function runDraft(opts: {
             pack: r + 1, pick: p + 1, packsTotal: event.packs, cardsInPack: pack.length,
             passing: dir === 1 ? "left" : "right",
             picks: pools[s].map((c) => c.name),
+            passedThisPack: passed[s],
           },
           options: pack.map((c) => ({ id: c.iid, label: optionLabel(db, c.name), card: c.name })),
           min: 1, max: 1,
@@ -67,6 +71,7 @@ export async function runDraft(opts: {
       packs = packs.map((pack, s) => {
         const card = chosen[s];
         pools[s].push(card);
+        passed[s].push(...pack.filter((c) => c.iid !== card.iid).map((c) => c.name));
         picks.push({ seat: s, pack: r + 1, pick: p + 1, card: card.name, packSize: pack.length });
         log.write({ type: "pick", pod, seat: seats[s].id, pack: r + 1, pick: p + 1, card: card.name, pack_contents: pack.map((c) => c.name) });
         return pack.filter((c) => c.iid !== card.iid);
