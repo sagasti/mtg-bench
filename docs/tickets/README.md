@@ -21,8 +21,8 @@ One file per ticket. Status: open | in progress | done | dropped.
 | [MB-015](MB-015.md) | Harness exceptions become agent forfeits, and forfeit rows drop the error | medium | open |
 | [MB-016](MB-016.md) | Malformed submit_decision calls are coerced to choice [] and accepted when min is 0 | medium | open |
 | [MB-017](MB-017.md) | Errored matches still award standings points and match-level results | medium | done |
-| [MB-018](MB-018.md) | Provenance inflated: match notes counted as in-game agent decisions; re-asks counted separately | medium | open |
-| [MB-019](MB-019.md) | Tokens of decisions that end in infra errors are missing from the cost tables | medium | open |
+| [MB-018](MB-018.md) | Provenance inflated: match notes counted as in-game agent decisions; re-asks counted separately | medium | in progress |
+| [MB-019](MB-019.md) | Tokens of decisions that end in infra errors are missing from the cost tables | medium | done |
 | [MB-020](MB-020.md) | Missing prompt templates render silently as empty | low | open |
 | [MB-021](MB-021.md) | Bootstrap clusters collide when merging runs | low | done |
 | [MB-022](MB-022.md) | Card reference omits graveyard, exile and stack-source cards | low | open |

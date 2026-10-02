@@ -30,18 +30,26 @@ export function costOf(r: { inputTokens: number; outputTokens: number; cacheRead
     + r.cacheWriteTokens * (p.cacheWrite ?? p.input * 1.25)) / 1e6;
 }
 
-function addDecision(a: Agg, d: DecisionRecord, pricing: Record<string, Pricing>) {
+/** Decision counts, validity, latency and tool use come from decision rows. */
+function addDecision(a: Agg, d: DecisionRecord) {
   if (d.autoResolved) { a.autoResolved++; return; }
   a.decisions++;
-  a.modelCalls += d.modelCalls;
-  a.inputTokens += d.inputTokens; a.outputTokens += d.outputTokens;
-  a.cacheReadTokens += d.cacheReadTokens; a.cacheWriteTokens += d.cacheWriteTokens; a.reasoningTokens += d.reasoningTokens;
   a.invalidAttempts += d.invalidAttempts; if (d.fallback) a.fallbacks++; if (d.forfeit) a.forfeits++;
   if (d.modelCalls > 0) a.latencies.push(d.latencyMs);
   for (const [k, v] of Object.entries(d.toolCalls ?? {})) a.tools[k] = (a.tools[k] ?? 0) + v;
-  a.reportedCost += d.reportedCostUsd ?? 0; a.costReportedCalls += d.costReportedCalls ?? 0;
-  const c = costOf(d, pricing[d.model]);
-  a.cost = a.cost === null || c === null ? (d.modelCalls ? null : a.cost) : a.cost + c;
+}
+
+/**
+ * Tokens and cost come from call rows (usage.jsonl), which include the calls of a decision that ended in an
+ * infrastructure error: that decision throws before its decision row is written.
+ */
+function addCall(a: Agg, c: CallRecord, pricing: Record<string, Pricing>) {
+  a.modelCalls++;
+  a.inputTokens += c.inputTokens; a.outputTokens += c.outputTokens;
+  a.cacheReadTokens += c.cacheReadTokens; a.cacheWriteTokens += c.cacheWriteTokens; a.reasoningTokens += c.reasoningTokens;
+  a.reportedCost += c.reportedCostUsd ?? 0; a.costReportedCalls += c.costReportedCalls ?? 0;
+  const cost = costOf(c, pricing[c.model]);
+  a.cost = a.cost === null || cost === null ? null : a.cost + cost;
 }
 
 const pct = (xs: number[], q: number) => { if (!xs.length) return 0; const s = [...xs].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(q * s.length))]; };
@@ -93,18 +101,24 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
   const bySeat = new Map<string, Agg & { model: string; provider: string }>();
   const bySeatPhase = new Map<string, Agg>();
   const byKind = new Map<string, Agg>();
-  for (const d of decisions) {
-    if (!bySeat.has(d.seat)) bySeat.set(d.seat, { ...newAgg(), model: d.model, provider: d.provider });
-    addDecision(bySeat.get(d.seat)!, d, pricing);
-    const sp = `${d.seat}|${d.phase}`;
+  const aggs = (r: DecisionRecord | CallRecord) => {
+    if (!bySeat.has(r.seat)) bySeat.set(r.seat, { ...newAgg(), model: r.model, provider: r.provider });
+    const sp = `${r.seat}|${r.phase}`;
     if (!bySeatPhase.has(sp)) bySeatPhase.set(sp, newAgg());
-    addDecision(bySeatPhase.get(sp)!, d, pricing);
-    if (d.provider && !["random", "rank-bot", "forge-ai"].includes(d.provider)) {
-      if (!byKind.has(d.kind)) byKind.set(d.kind, newAgg());
-      addDecision(byKind.get(d.kind)!, d, pricing);
+    const out: Agg[] = [bySeat.get(r.seat)!, bySeatPhase.get(sp)!];
+    if (r.provider && !["random", "rank-bot", "forge-ai"].includes(r.provider)) {
+      if (!byKind.has(r.kind)) byKind.set(r.kind, newAgg());
+      out.push(byKind.get(r.kind)!);
     }
-  }
-  for (const c of calls) if (c.error) { const a = bySeat.get(c.seat); if (a) a.apiErrors++; }
+    return out;
+  };
+  for (const d of decisions) for (const a of aggs(d)) addDecision(a, d);
+  for (const c of calls) for (const a of aggs(c)) addCall(a, c, pricing);
+  for (const c of calls) if (c.error) bySeat.get(c.seat)!.apiErrors++;
+  // Calls whose decision never got a row (it ended in an infrastructure error): counted above, listed in the report.
+  const recorded = new Set(decisions.map((d) => `${d.runId}|${d.seat}|${d.requestId}`));
+  const unrecorded = new Map<string, number>();
+  for (const c of calls) if (!recorded.has(`${c.runId}|${c.seat}|${c.requestId}`)) unrecorded.set(c.seat, (unrecorded.get(c.seat) ?? 0) + 1);
 
   const ratings = rate(outcomesFromMatches(matches), { bootstrap: 500 });
   const censored = censoredBySeat(matches);
@@ -133,7 +147,8 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
   };
   const add = (m: Map<string, number>, k: string, n = 1) => m.set(k, (m.get(k) ?? 0) + n);
   for (const d of decisions) {
-    if (d.phase !== "game") continue;
+    // In-game steps only: match notes are written between games (runs before their own phase logged them as "game").
+    if (d.phase !== "game" || d.kind === "match_notes") continue;
     const p = prov(d.seat);
     if (d.autoResolved) add(p.forced, `${d.kind}: only one option`);
     else if (d.forfeit) add(p.forfeit, `${d.kind}: no valid answer`);
@@ -167,7 +182,7 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
     for (const e of m.engineErrors ?? []) add(engineErrors, `${e.kind} at ${e.at || "?"}`);
   }
 
-  return { incomplete, versions, decisions, calls, matches, bySeat, bySeatPhase, byKind, ratings, censored, games, reasons, delegated, forfeited, provenance, engineErrors, matchesWithEngineErrors, playWinRate: decided.length ? playWins / decided.length : null, pricing };
+  return { incomplete, versions, decisions, calls, unrecorded, matches, bySeat, bySeatPhase, byKind, ratings, censored, games, reasons, delegated, forfeited, provenance, engineErrors, matchesWithEngineErrors, playWinRate: decided.length ? playWins / decided.length : null, pricing };
 }
 
 export function renderReport(s: ReturnType<typeof summarize>, title: string): string {
@@ -200,6 +215,7 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
   const anyReported = [...s.bySeat.values()].some((a) => a.costReportedCalls > 0);
   L.push("", `Total cost: computed ${usd(totalCost)}${totalCost === null ? " (add `pricing` for every model in the config to get costs)" : ""}`
     + (anyReported ? ` · reported by provider ${usd(totalReported)}` : ""), "",
+    ...(s.unrecorded.size ? [`Includes ${[...s.unrecorded.entries()].map(([seat, n]) => `${seat}: ${n}`).join(", ")} model call(s) whose decision ended in an infrastructure error and has no decision row.`, ""] : []),
     "Computed cost is tokens × the config's `pricing`. Reported cost is what the provider says it charged (OpenRouter returns it per call); when they differ, trust the reported figure and fix `pricing` or pin the host.", "");
   const hosts = new Map<string, Map<string, number>>();
   for (const c of s.calls) if (c.servedBy) {

@@ -44,7 +44,7 @@ Packs, seating, pairings and match seeds all derive from `event.seed`, each from
 A run without `run_end` in `events.jsonl`, or with a pod that has `pod_start` but no `pod_end`, stopped early: the report opens with **INCOMPLETE** and `summary.json` lists the reasons under `incomplete`.
 
 1. **Ratings**: Bradley-Terry fit over all games of uncensored matches, Elo scale, 95% bootstrap CI (resampling whole matches; a cluster is run + match id, so merged runs never share one). Censored matches per seat follow the table.
-2. **Token usage and cost by seat**: decisions, calls, each token type, tokens/decision, cost, p50/p95 decision latency.
+2. **Token usage and cost by seat**: decisions, calls, each token type, tokens/decision, cost, p50/p95 decision latency. Tokens, calls and cost are summed from `usage.jsonl`, so the calls of a decision that ended in an infrastructure error (which has no decision row) still count; the report says how many such calls there were. Decision counts, validity and latency come from `decisions.jsonl`.
 3. **By seat × phase**: study / draft / deckbuild / game split of tokens and cost.
 4. **By decision kind**: average tokens, invalid answers and fallbacks per kind (e.g. are blockers expensive? do models flub targets?).
 5. **Reliability and tool use**: invalid answers, fallback rate, API errors, knowledge-tool calls by tool.
