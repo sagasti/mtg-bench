@@ -43,6 +43,17 @@ bridge/build.sh ~/forge/forge-gui-desktop-*-jar-with-dependencies.jar
 ```
 If it doesn't compile, the Forge version probably differs from the source I checked against (`2.0.15-SNAPSHOT`, Sept 2026). Paste the javac errors back to me.
 
+### Conformance check: run after any Forge bump or bridge change
+
+Compiling isn't enough: the bridge reads Forge fields by reflection and keys off prompt and button text, so a new Forge can break it silently. `bench conformance` plays four bot-only matches (rank-bot, random, forge-ai; best-of-3) with the fixed decks in `conformance/decks/` and fixed seeds, about a minute with two JVMs, and compares them with `conformance/baseline.forge.json`:
+
+```bash
+npm run bench -- conformance config/forge-bots.yaml            # engine settings (forgeDir, java) come from the config; event settings are fixed
+npm run bench -- conformance config/forge-bots.yaml --update   # after checking a difference is intended: re-record the baseline, commit it
+```
+
+It fails (exit code 1, differences listed) on any match error, any change in engine exceptions or bridge errors, or a game-end kind the baseline didn't have; it allows some drift in games, decisions per seat and kind (±max(10, 50%); per-seat totals ±max(20, 25%)), forfeits and delegations (±max(3, 50%)). Same seed doesn't promise the same games (the bots' and Forge AI's random state could differ), hence the tolerances; on Forge 2ccbbb01326e six runs gave identical summaries. The baseline records the harness commit, Forge commit and bridge jar hash it came from. If behaviour changed on purpose, bump the affected anchor versions (docs/ANALYTICS.md "Anchor versions") as well as the baseline.
+
 ## 4. Smoke tests, in order
 
 ```bash

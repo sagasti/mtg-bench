@@ -28,6 +28,7 @@ event:
   parallelMatches: 4              # matches in a round run concurrently
   priorityStops: smart            # Forge: smart = ask at meaningful priority stops; all = every priority pass
   manaPayment: smart              # Forge: smart = ask which lands to tap when it can matter; always = every payment
+  maxFailureRate: 0.05            # report: seats with forfeits + fallbacks + API errors above this share of decisions are listed apart
 
 engine:
   type: forge                     # forge | mock (mock = pipeline testing only)
@@ -35,7 +36,7 @@ engine:
   # forgeJar: ~/forge/forge-gui-desktop-2.0.xx-jar-with-dependencies.jar   # auto-detected if omitted
   # bridgeJar: bridge/build/mtg-bench-bridge.jar                          # default
   javaOpts: ["-Xmx3g"]
-  matchTimeoutSec: 7200
+  gameTimeoutSec: 3600            # wall-clock budget per game; the match cap is gamesPerMatch × this (matchTimeoutSec overrides)
 
 outputDir: runs
 

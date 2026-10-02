@@ -4,28 +4,30 @@
  *   cards index --forge-res <dir>         build data/cards.json from Forge card scripts
  *   cubes --forge-res <dir>               list cubes bundled with Forge and their sizes
  *   check <config.yaml> [--ping]          validate config, keys, card data, cube, engine, rules file
- *   run <config.yaml> [--engine mock|forge] [--pods N] [--run-id ID] [--force] [--forge-res DIR]
+ *   run <config.yaml> [--engine mock|forge] [--pods N] [--run-id ID] [--force] [--forge-res DIR] [--expect-hash H]
  *       [--decks-from RUNDIR | --pools-from RUNDIR] [--allow-seat-changes]   replay a saved run's seating + decks (matches only) or drafted pools (deckbuild + matches)
  *   match <config.yaml> --seats A,B --decks a.dck,b.dck [--matches N] [--parallel N] [--run-id ID] [--force]   head-to-head with fixed decks, no draft
- *   report <runDir...> [--allow-same-seed]   (re)build report.md for one run, or a merged report for several
- *   rate <runDir...> [--level game|match] [--anchor seat=1500] [--allow-same-seed]
+ *   report <runDir...> [--allow-same-seed] [--allow-anchor-changes] [--max-failure-rate 0.05]   (re)build report.md for one run, or a merged report for several
+ *   rate <runDir...> [--level game|match] [--anchor seat=1500] [--allow-same-seed] [--allow-anchor-changes]
+ *   conformance <config.yaml> [--update] [--baseline FILE] [--run-id ID] [--force]   fixed bot matches vs a stored baseline (after any Forge bump)
  */
 import fs from "node:fs";
 import path from "node:path";
-import { renderReport, sharedDrafts, summarize } from "./analytics/report.ts";
+import { anchorDifferences, renderReport, sharedDrafts, summarize } from "./analytics/report.ts";
 import { AnthropicProvider } from "./agents/providers/anthropic.ts";
 import { OpenAIProvider } from "./agents/providers/openai.ts";
 import { checkSeatSpec } from "./agents/llm.ts";
 import { promptFile } from "./agents/render.ts";
 import { buildIndex, loadDb, saveIndex } from "./cards/db.ts";
 import { loadCube, parseCardList } from "./cards/cube.ts";
-import { loadConfig, missingKeys } from "./config.ts";
+import { configHash, loadConfig, missingKeys } from "./config.ts";
 import { ForgeEngine, resolveForge } from "./engine/forge/forge.ts";
 import { MockEngine } from "./engine/mock/mock.ts";
 import { SUBMIT_TOOL } from "./knowledge/tools.ts";
 import { loadRules } from "./knowledge/rules.ts";
 import { rate } from "./rating/bt.ts";
 import { outcomesFromMatches, readMatches } from "./rating/outcomes.ts";
+import { compareToBaseline, CONFORMANCE_DIR, runConformance } from "./tournament/conformance.ts";
 import { runHeadToHead } from "./tournament/match.ts";
 import { runEvent } from "./tournament/run.ts";
 import { info, loadDotEnv, setVerbose } from "./util/log.ts";
@@ -36,15 +38,24 @@ function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(`--${name}`);
   return i >= 0 ? args[i + 1] : undefined;
 }
-const BOOL_FLAGS = ["--ping", "--verbose", "--force", "--allow-seat-changes", "--allow-same-seed"];
+const BOOL_FLAGS = ["--ping", "--verbose", "--force", "--allow-seat-changes", "--allow-same-seed", "--allow-anchor-changes", "--update"];
 const positional = (args: string[]) => args.filter((a, i) => !a.startsWith("--") && !(i > 0 && args[i - 1].startsWith("--") && !BOOL_FLAGS.includes(args[i - 1])));
 
-/** report / rate pool runs as independent replicates: refuse runs that drafted the same packs unless --allow-same-seed. */
-function checkIndependent(dirs: string[], args: string[]) {
+/**
+ * report / rate pool runs as independent replicates on one rating scale: refuse runs that drafted the same packs unless
+ * --allow-same-seed, and runs whose bot anchors or cube differ unless --allow-anchor-changes.
+ */
+function checkPoolable(dirs: string[], args: string[]) {
   const shared = sharedDrafts(dirs);
-  if (!shared.length || args.includes("--allow-same-seed")) return;
-  throw new Error(`these runs drafted the same packs, so they aren't independent replicates:\n  ${shared.join("\n  ")}\n`
-    + "give each event its own seed, or pass --allow-same-seed to pool them anyway");
+  if (shared.length && !args.includes("--allow-same-seed")) {
+    throw new Error(`these runs drafted the same packs, so they aren't independent replicates:\n  ${shared.join("\n  ")}\n`
+      + "give each event its own seed, or pass --allow-same-seed to pool them anyway");
+  }
+  const anchors = anchorDifferences(dirs);
+  if (anchors.length && !args.includes("--allow-anchor-changes")) {
+    throw new Error(`these runs' anchors differ (bot version or cube), so their ratings aren't on one scale:\n  ${anchors.join("\n  ")}\n`
+      + "report them separately, or pass --allow-anchor-changes to pool them anyway");
+  }
 }
 
 async function main() {
@@ -75,6 +86,7 @@ async function main() {
       const problems: string[] = [];
       const ok = (s: string) => console.log(`  ✓ ${s}`);
       console.log("Config"); ok(`${cfg.seats.length} seats: ${cfg.seats.map((s) => `${s.id} (${s.provider}${s.model ? `:${s.model}` : ""})`).join(", ")}`);
+      ok(`config hash ${configHash(cfg)} (pre-register it; \`run --expect-hash\` refuses a different config)`);
       problems.push(...missingKeys(cfg));
       console.log("Card data");
       let db;
@@ -123,7 +135,13 @@ async function main() {
       const cfg = loadConfig(positional(args)[0]);
       if (flag(args, "forge-res")) cfg.forgeRes = path.resolve(flag(args, "forge-res")!);
       const engineType = (flag(args, "engine") ?? cfg.engine.type) as "mock" | "forge";
+      cfg.engine.type = engineType;
       if (flag(args, "pods")) cfg.event.pods = Number(flag(args, "pods"));
+      // Pre-registration: the effective config (after the flags above) must hash to what was registered.
+      const expect = flag(args, "expect-hash");
+      if (expect !== undefined && (expect.length < 8 || !configHash(cfg).startsWith(expect.toLowerCase()))) {
+        throw new Error(`config hash ${configHash(cfg)} doesn't match --expect-hash ${expect} (give at least 8 hex digits); the event differs from the registered one`);
+      }
       const miss = missingKeys(cfg);
       if (miss.length) throw new Error("missing API keys:\n  " + miss.join("\n  "));
       const engine = engineType === "forge" ? new ForgeEngine(cfg.engine) : new MockEngine(loadDb());
@@ -160,10 +178,34 @@ async function main() {
       console.log(`Report: ${path.join(runDir, "report.md")}`);
       return;
     }
+    case "conformance": {
+      // Bridge conformance (MB-010): fixed bot matches compared with a stored baseline; run after any Forge bump.
+      const cfg = loadConfig(positional(args)[0]);
+      if (flag(args, "forge-res")) cfg.forgeRes = path.resolve(flag(args, "forge-res")!);
+      const engineType = (flag(args, "engine") ?? cfg.engine.type) as "mock" | "forge";
+      const engine = engineType === "forge" ? new ForgeEngine(cfg.engine) : new MockEngine(loadDb());
+      const baselineFile = path.resolve(flag(args, "baseline") ?? path.join(CONFORMANCE_DIR, `baseline.${engineType}.json`));
+      const { runDir, current } = await runConformance(cfg, engine, { runId: flag(args, "run-id"), force: args.includes("--force"), parallel: flag(args, "parallel") ? Number(flag(args, "parallel")) : undefined });
+      for (const [id, m] of Object.entries(current.matches)) {
+        const total = Object.values(m.decisions).reduce((a, b) => a + b, 0);
+        console.log(`  ${id.padEnd(18)} ${m.games} game(s) [${m.endReasons.join(", ")}] · ${total} decisions · ${m.forfeits} forfeits · ${m.delegations} delegated · ${m.engineExceptions} engine exceptions · ${m.bridgeErrors} bridge errors${m.error ? ` · ERROR ${m.error}` : ""}`);
+      }
+      if (args.includes("--update")) {
+        fs.writeFileSync(baselineFile, JSON.stringify(current, null, 2) + "\n");
+        console.log(`\nBaseline written: ${baselineFile}`);
+        return;
+      }
+      if (!fs.existsSync(baselineFile)) throw new Error(`no baseline at ${baselineFile}; create one with --update on a known-good bridge`);
+      const diffs = compareToBaseline(JSON.parse(fs.readFileSync(baselineFile, "utf8")), current);
+      if (diffs.length) { console.log(`\nCONFORMANCE FAILED against ${baselineFile}:`); for (const d of diffs) console.log(`  ✗ ${d}`); process.exitCode = 1; }
+      else console.log(`\nConformance passed against ${baselineFile}.`);
+      console.log(`Run: ${runDir}`);
+      return;
+    }
     case "report": {
       const dirs = positional(args);
-      checkIndependent(dirs, args);
-      const s = summarize(dirs);
+      checkPoolable(dirs, args);
+      const s = summarize(dirs, undefined, { maxFailureRate: flag(args, "max-failure-rate") ? Number(flag(args, "max-failure-rate")) : undefined });
       const md = renderReport(s, dirs.length === 1 ? `Run ${path.basename(dirs[0])}` : `Merged report (${dirs.length} runs)`);
       if (dirs.length === 1) fs.writeFileSync(path.join(dirs[0], "report.md"), md);
       console.log(md);
@@ -171,7 +213,7 @@ async function main() {
     }
     case "rate": {
       const dirs = positional(args);
-      checkIndependent(dirs, args);
+      checkPoolable(dirs, args);
       const level = (flag(args, "level") ?? "game") as "game" | "match";
       const anchorArg = flag(args, "anchor");
       const anchor = anchorArg ? { id: anchorArg.split("=")[0], rating: Number(anchorArg.split("=")[1] ?? 1500) } : undefined;
@@ -182,7 +224,7 @@ async function main() {
       return;
     }
     default:
-      console.log(fs.readFileSync(new URL(import.meta.url), "utf8").split("\n").slice(1, 10).join("\n"));
+      console.log(fs.readFileSync(new URL(import.meta.url), "utf8").split("\n").slice(1, 13).join("\n"));
   }
 }
 

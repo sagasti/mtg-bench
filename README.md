@@ -50,10 +50,11 @@ seats:            # exactly 8
 ```
 npm run bench -- cards index --forge-res <dir>     build data/cards.json
 npm run bench -- cubes --forge-res <dir>           list Forge's bundled cubes
-npm run bench -- check <config> [--ping]           validate config, keys, data, engine; --ping tests each LLM seat
-npm run bench -- run <config> [--engine mock|forge] [--pods N] [--run-id ID] [--force] [--forge-res DIR] [--verbose]
-npm run bench -- report <runDir...> [--allow-same-seed]   report.md (merged if several)
-npm run bench -- rate <runDir...> [--level game|match] [--anchor seat=1500] [--allow-same-seed]
+npm run bench -- check <config> [--ping]           validate config, keys, data, engine, print the config hash; --ping tests each LLM seat
+npm run bench -- run <config> [--engine mock|forge] [--pods N] [--run-id ID] [--force] [--forge-res DIR] [--expect-hash H] [--verbose]
+npm run bench -- report <runDir...> [--allow-same-seed] [--allow-anchor-changes] [--max-failure-rate X]   report.md (merged if several)
+npm run bench -- rate <runDir...> [--level game|match] [--anchor seat=1500] [--allow-same-seed] [--allow-anchor-changes]
+npm run bench -- conformance <config> [--update]   fixed bot matches vs conformance/baseline.forge.json; run after any Forge bump
 ```
 
 ## Layout

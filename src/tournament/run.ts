@@ -4,6 +4,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { anchorVersions } from "../agents/bots.ts";
 import { makeSeat } from "../agents/factory.ts";
 import { promptFile } from "../agents/render.ts";
 import type { Seat } from "../agents/agent.ts";
@@ -11,10 +12,10 @@ import { Recorder } from "../analytics/recorder.ts";
 import { writeReport } from "../analytics/report.ts";
 import { loadDb } from "../cards/db.ts";
 import { loadCube, loadRankings } from "../cards/cube.ts";
-import type { BenchConfig } from "../config.ts";
+import { type BenchConfig, configHash } from "../config.ts";
 import { buildDeck, type Deck, saveDeck } from "../deckbuild/deckbuild.ts";
 import { type CardInstance, runDraft } from "../draft/draft.ts";
-import type { GameEngine, MatchResult } from "../engine/types.ts";
+import { type GameEngine, type MatchResult, replayable } from "../engine/types.ts";
 import { KnowledgeBase } from "../knowledge/tools.ts";
 import { rate } from "../rating/bt.ts";
 import { outcomesFromMatches } from "../rating/outcomes.ts";
@@ -58,7 +59,8 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
   const runDir = freshRunDir(cfg.outputDir, runId, opts.force);
   // Snapshot config (keys live in env vars, so this is safe to keep) + prompts used; a derived run also records its source.
   const provenance = collectProvenance(cfg, engine.name);
-  fs.writeFileSync(path.join(runDir, "config.json"), JSON.stringify({ ...cfg, source: opts.source, provenance }, null, 2));
+  const hash = configHash(cfg); // pre-registration: `run --expect-hash` checks it before anything runs
+  fs.writeFileSync(path.join(runDir, "config.json"), JSON.stringify({ ...cfg, source: opts.source, provenance, configHash: hash }, null, 2));
   fs.cpSync(promptFile(ev.promptVersion, ""), path.join(runDir, "prompts"), { recursive: true });
 
   const cube = loadCube(db, ev.cube, cfg.forgeRes);
@@ -73,7 +75,8 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
   const allMatches: MatchResult[] = [];
   info(`run ${runId}: ${seats.length} seats, ${ev.pods} pod(s), ${ev.format}, bo${ev.gamesPerMatch}, engine=${engine.name}, knowledge=${ev.knowledge}`);
   if (source) info(`${source.src.mode} from ${source.src.runDir}: study${source.src.mode === "decks" ? ", draft and deckbuild" : " and draft"} skipped`);
-  recorder.event("run_start", { cube: cube.name, cubeSize: cube.cards.length, seed: ev.seed, provenance,
+  recorder.event("run_start", { cube: cube.name, cubeSize: cube.cards.length, seed: ev.seed, provenance, configHash: hash,
+    anchors: anchorVersions(cfg.seats, engine.name, cfg.engine.controller),
     seats: cfg.seats.map((s) => ({ id: s.id, provider: s.provider, model: s.model, temperature: s.temperature })), source: opts.source, sourceSeats: source?.seats });
 
   if (ev.cubeStudy && !source) {
@@ -120,6 +123,7 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
     const n = order.length;
     const points = new Array(n).fill(0);
     const censored = new Array(n).fill(0); // errored matches: no points for either seat
+    const notPlayed = new Array(n).fill(0); // a seat was over budget: no points either
     const played = new Set<string>();
     const nRounds = ev.format === "round-robin" ? n - 1 : ev.rounds;
     const rr = ev.format === "round-robin" ? roundRobin(n) : null;
@@ -127,31 +131,45 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
       const pairs = rr ? rr[round] : swissRound(n, points, played, round, prng.fork(`swiss${round}`));
       const rematches = pairs.filter(([a, b]) => played.has(a < b ? `${a}-${b}` : `${b}-${a}`)).length;
       if (rematches) info(`round ${round + 1}: no pairing without rematches; ${rematches} rematch(es)`);
-      const results = await pool(pairs, ev.parallelMatches, async ([a, b]) => {
-        const matchId = `p${pod}-r${round + 1}-${order[a].id}-vs-${order[b].id}`;
+      const playOne = async (a: number, b: number, matchId: string, seed: number, replayOf?: string) => {
         let res: MatchResult;
-        try {
+        const stopped = [order[a], order[b]].map((s) => ({ seat: s.id, reason: s.overBudget() })).find((x) => x.reason);
+        if (stopped) res = { matchId, pod, round: round + 1, seats: [order[a].id, order[b].id], games: [], winner: null, notPlayed: { seat: stopped.seat, reason: stopped.reason! } };
+        else try {
           res = await engine.playMatch({
             matchId, pod, round: round + 1, seats: [order[a], order[b]], decks: [decks[a], decks[b]],
-            deckFiles: [deckFiles[a], deckFiles[b]], gamesPerMatch: ev.gamesPerMatch, seed: prng.fork(matchId).int(2 ** 31),
+            deckFiles: [deckFiles[a], deckFiles[b]], gamesPerMatch: ev.gamesPerMatch, seed,
             maxGameTurns: ev.maxGameTurns, runDir, priorityStops: ev.priorityStops, manaPayment: ev.manaPayment, maxRetries: ev.maxRetries,
           });
         } catch (e: any) {
-          res = { matchId, pod, round: round + 1, seats: [order[a].id, order[b].id], games: [], winner: null, error: String(e?.message ?? e) };
+          res = { matchId, pod, round: round + 1, seats: [order[a].id, order[b].id], games: [], winner: null, error: String(e?.message ?? e), errorKind: "harness" };
         }
+        if (replayOf) res.replayOf = replayOf;
         matchLog.write(res);
-        const score = res.games.map((g) => (g.winner === 0 ? "W" : g.winner === 1 ? "L" : "D")).join("");
-        info(`  r${round + 1} ${order[a].id} vs ${order[b].id}: ${res.error ? "censored" : res.winner === 0 ? order[a].id : res.winner === 1 ? order[b].id : "draw"} (${score})${res.error ? ` ERROR ${res.error}` : ""}`);
-        return { res, a, b };
-      });
-      for (const { res, a, b } of results) {
         allMatches.push(res);
+        const score = res.games.map((g) => (g.winner === 0 ? "W" : g.winner === 1 ? "L" : "D")).join("");
+        const outcome = res.notPlayed ? `not played, ${res.notPlayed.seat} over budget` : res.error ? (replayOf || !replayable(res) ? "censored" : "errored, replaying at the end of the round")
+          : res.winner === 0 ? order[a].id : res.winner === 1 ? order[b].id : "draw";
+        info(`  r${round + 1} ${order[a].id} vs ${order[b].id}${replayOf ? " (replay)" : ""}: ${outcome} (${score})${res.error ? ` ERROR ${res.error}` : ""}`);
+        return { res, a, b, seed };
+      };
+      const first = await pool(pairs, ev.parallelMatches, ([a, b]) => {
+        const matchId = `p${pod}-r${round + 1}-${order[a].id}-vs-${order[b].id}`;
+        return playOne(a, b, matchId, prng.fork(matchId).int(2 ** 31));
+      });
+      // A match that errored for a reason other than a harness bug is played once more from scratch, same decks and
+      // seed, once the round's other matches are done; only if the replay errors too is the pairing censored.
+      const replays = await pool(first.filter((r) => replayable(r.res)), ev.parallelMatches,
+        (r) => playOne(r.a, r.b, `${r.res.matchId}-replay`, r.seed, r.res.matchId));
+      const results = first.map((r) => replays.find((x) => x.res.replayOf === r.res.matchId) ?? r);
+      for (const { res, a, b } of results) {
         played.add(a < b ? `${a}-${b}` : `${b}-${a}`);
-        if (res.error) { censored[a]++; censored[b]++; }
+        if (res.notPlayed) { notPlayed[a]++; notPlayed[b]++; }
+        else if (res.error) { censored[a]++; censored[b]++; }
         else if (res.winner === 0) points[a] += 3; else if (res.winner === 1) points[b] += 3; else { points[a] += 1; points[b] += 1; }
       }
     }
-    recorder.event("pod_end", { pod, standings: order.map((s, i) => ({ seat: s.id, points: points[i], ...(censored[i] ? { censored: censored[i] } : {}) })).sort((x, y) => y.points - x.points) });
+    recorder.event("pod_end", { pod, standings: order.map((s, i) => ({ seat: s.id, points: points[i], ...(censored[i] ? { censored: censored[i] } : {}), ...(notPlayed[i] ? { notPlayed: notPlayed[i] } : {}) })).sort((x, y) => y.points - x.points) });
   }
 
   const ratings = rate(outcomesFromMatches(allMatches), { bootstrap: 500, seed: ev.seed });

@@ -6,14 +6,15 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { BOT_VERSIONS } from "../agents/bots.ts";
 import type { BenchConfig, Pricing } from "../config.ts";
 import { scanEngineErrors } from "../engine/forge/log.ts";
 import type { MatchResult } from "../engine/types.ts";
-import { rate } from "../rating/bt.ts";
-import { censoredBySeat, outcomesFromMatches, readMatches } from "../rating/outcomes.ts";
+import { podRatings, rate } from "../rating/bt.ts";
+import { cappedDrawsBySeat, censoredBySeat, outcomesFromMatches, podLabel, readMatches } from "../rating/outcomes.ts";
 import { readJsonl } from "../util/log.ts";
 import { describeProvenance, type Provenance } from "../util/provenance.ts";
-import type { CallRecord, DecisionRecord } from "./recorder.ts";
+import { type CallRecord, costOf, type DecisionRecord } from "./recorder.ts";
 
 /** Row fields newer runs add (absent in older runs). */
 type DecisionRow = DecisionRecord & { infraError?: boolean; timedOut?: boolean; specViolation?: unknown; attempt?: number };
@@ -29,12 +30,6 @@ interface Agg {
 const newAgg = (): Agg => ({ decisions: 0, autoResolved: 0, modelCalls: 0, apiErrors: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0,
   cacheWriteTokens: 0, reasoningTokens: 0, invalidAttempts: 0, fallbacks: 0, latencies: [], tools: {}, cost: 0, reportedCost: 0, costReportedCalls: 0, forfeits: 0,
   reasks: 0, infraErrors: 0, truncated: 0 });
-
-export function costOf(r: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }, p?: Pricing): number | null {
-  if (!p) return null;
-  return (r.inputTokens * p.input + r.outputTokens * p.output + r.cacheReadTokens * (p.cacheRead ?? p.input * 0.1)
-    + r.cacheWriteTokens * (p.cacheWrite ?? p.input * 1.25)) / 1e6;
-}
 
 /**
  * Decision counts, validity, latency and tool use come from decision rows. A decision abandoned by an infrastructure
@@ -87,22 +82,57 @@ export function sharedDrafts(runDirs: string[]): string[] {
   return [...seen.entries()].filter(([, runs]) => runs.length > 1).map(([key, runs]) => `${key}: ${runs.join(", ")}`);
 }
 
-export function summarize(runDirs: string[], cfg?: BenchConfig) {
+/**
+ * Bot anchors whose version differs between runs, and runs on different cubes: a bot's rating depends on both
+ * (MB-002), so pooling them mixes two rating scales. One line per difference; empty when the runs agree. Runs from
+ * before anchors were recorded count as "unrecorded".
+ */
+export function anchorDifferences(runDirs: string[]): string[] {
+  const versions = new Map<string, Map<string, string[]>>(); // provider -> version -> runs
+  const cubes = new Map<string, string[]>();
+  const note = <K>(m: Map<K, string[]>, k: K, run: string) => { if (!m.get(k)?.includes(run)) m.set(k, [...(m.get(k) ?? []), run]); };
+  for (const d of runDirs) {
+    const run = path.basename(d);
+    const start = readJsonl(path.join(d, "events.jsonl")).find((e) => e.type === "run_start");
+    const f = path.join(d, "config.json");
+    const cfg = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : undefined;
+    note(cubes, start?.cube ?? cfg?.event?.cube ?? "unknown", run);
+    const anchors: Record<string, string> = start?.anchors ?? {};
+    for (const s of (cfg?.seats ?? []) as { id: string; provider: string }[]) {
+      if (!BOT_VERSIONS[s.provider]) continue;
+      if (start?.headToHead && !start.seats?.includes(s.id)) continue;
+      if (!versions.has(s.provider)) versions.set(s.provider, new Map());
+      note(versions.get(s.provider)!, anchors[s.id] ?? `${s.provider}@unrecorded`, run);
+    }
+  }
+  const list = (m: Map<string, string[]>) => [...m.entries()].map(([v, runs]) => `${v} (${runs.join(", ")})`).join("; ");
+  const out = [...versions.entries()].filter(([, m]) => m.size > 1).map(([p, m]) => `${p}: ${list(m)}`);
+  if (cubes.size > 1) out.push(`cube: ${list(cubes)}`);
+  return out;
+}
+
+export function summarize(runDirs: string[], cfg?: BenchConfig, opts: { maxFailureRate?: number } = {}) {
   const decisions: DecisionRow[] = runDirs.flatMap((d) => readJsonl(path.join(d, "decisions.jsonl")));
   const calls: CallRow[] = runDirs.flatMap((d) => readJsonl(path.join(d, "usage.jsonl")));
   const matches: MatchResult[] = readMatches(runDirs);
   const pricing: Record<string, Pricing> = { ...(cfg?.pricing ?? {}) };
+  let maxFailureRate = opts.maxFailureRate ?? cfg?.event.maxFailureRate;
   for (const d of runDirs) {
     const f = path.join(d, "config.json");
-    if (fs.existsSync(f)) Object.assign(pricing, { ...JSON.parse(fs.readFileSync(f, "utf8")).pricing, ...pricing });
+    if (!fs.existsSync(f)) continue;
+    const runCfg = JSON.parse(fs.readFileSync(f, "utf8"));
+    Object.assign(pricing, { ...runCfg.pricing, ...pricing });
+    maxFailureRate ??= runCfg.event?.maxFailureRate;
   }
+  maxFailureRate ??= 0.05;
 
   // A run that stopped early has no run_end, and a pod it was playing no pod_end.
   const incomplete: string[] = [];
-  const versions: { run: string; provenance?: Provenance }[] = [];
+  const versions: { run: string; provenance?: Provenance; anchors?: Record<string, string>; configHash?: string }[] = [];
   for (const d of runDirs) {
     const events = readJsonl(path.join(d, "events.jsonl"));
-    versions.push({ run: path.basename(d), provenance: events.find((e) => e.type === "run_start")?.provenance });
+    const start = events.find((e) => e.type === "run_start");
+    versions.push({ run: path.basename(d), provenance: start?.provenance, anchors: start?.anchors, configHash: start?.configHash });
     if (!events.some((e) => e.type === "run_end")) incomplete.push(`${path.basename(d)}: no run_end`);
     const ended = new Set(events.filter((e) => e.type === "pod_end").map((e) => e.pod));
     for (const e of events) if (e.type === "pod_start" && !ended.has(e.pod)) incomplete.push(`${path.basename(d)}: pod ${e.pod} has no pod_end`);
@@ -141,8 +171,18 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
     specViolations.set(r.seat, v);
   }
 
-  const ratings = rate(outcomesFromMatches(matches), { bootstrap: 500 });
+  const outcomes = outcomesFromMatches(matches);
+  const ratings = rate(outcomes, { bootstrap: 500 });
+  const byPod = podRatings(outcomes);
+  const cappedDraws = cappedDrawsBySeat(matches);
   const censored = censoredBySeat(matches);
+  // Matches skipped because a seat was over its budget: per seat that went over (why) and per seat that lost the match.
+  const overBudget = new Map<string, string>();
+  const notPlayed = new Map<string, number>();
+  for (const m of matches) if (m.notPlayed) {
+    overBudget.set(m.notPlayed.seat, m.notPlayed.reason);
+    for (const seat of m.seats) notPlayed.set(seat, (notPlayed.get(seat) ?? 0) + 1);
+  }
   const games = matches.flatMap((m) => m.games);
   const reasons: Record<string, number> = {};
   for (const g of games) reasons[g.reason.split(":")[0]] = (reasons[g.reason.split(":")[0]] ?? 0) + 1;
@@ -158,6 +198,15 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
   };
   for (const d of decisions) if (d.forfeit || d.timedOut) bump(d.seat, `${d.kind} (${d.timedOut ? "timed out" : "no valid answer"})`);
   for (const m of matches) for (const f of m.forfeits ?? []) bump(m.seats[f.seat], `${f.what} (${f.reason.replace(/ in \d+ attempts.*/, "")})`);
+
+  // Exclusion rule: a seat whose forfeits (harness and bridge) + fallbacks + API errors exceed maxFailureRate of its
+  // decisions didn't play as configured often enough to rank; it's listed apart from the leaderboard, numbers kept.
+  const excluded = new Map<string, { rate: number; forfeits: number; fallbacks: number; apiErrors: number; decisions: number }>();
+  for (const [seat, a] of bySeat) {
+    const forfeits = [...(forfeited.get(seat)?.values() ?? [])].reduce((x, y) => x + y, 0);
+    const rate = a.decisions ? (forfeits + a.fallbacks + a.apiErrors) / a.decisions : 0;
+    if (rate > maxFailureRate) excluded.set(seat, { rate, forfeits, fallbacks: a.fallbacks, apiErrors: a.apiErrors, decisions: a.decisions });
+  }
 
   // Who decided each in-game decision (docs/DECISION-PROVENANCE.md): the agent, forced (one legal action),
   // policy (a configured rule), delegated (Forge's AI or a default), forfeit (the agent failed).
@@ -204,7 +253,7 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
     for (const e of m.engineErrors ?? []) add(engineErrors, `${e.kind} at ${e.at || "?"}`);
   }
 
-  return { incomplete, versions, specViolations, decisions, calls, unrecorded, matches, bySeat, bySeatPhase, byKind, ratings, censored, games, reasons, delegated, forfeited, provenance, engineErrors, matchesWithEngineErrors, playWinRate: decided.length ? playWins / decided.length : null, pricing };
+  return { incomplete, versions, specViolations, decisions, calls, unrecorded, matches, bySeat, bySeatPhase, byKind, ratings, byPod, merged: runDirs.length > 1, excluded, maxFailureRate, cappedDraws, censored, overBudget, notPlayed, games, reasons, delegated, forfeited, provenance, engineErrors, matchesWithEngineErrors, playWinRate: decided.length ? playWins / decided.length : null, pricing };
 }
 
 export function renderReport(s: ReturnType<typeof summarize>, title: string): string {
@@ -220,15 +269,50 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
   }
   L.push(`Matches: ${s.matches.length} · Games: ${s.games.length} · Decisions: ${s.decisions.length} · Model calls: ${s.calls.length}`, "");
 
+  const nPods = s.byPod.pods.length;
   L.push("## Ratings (Bradley-Terry, game level, Elo scale, 95% bootstrap CI)", "");
   L.push("| # | Seat | Rating | 95% CI | Games | Score |", "|---|---|---|---|---|---|");
-  s.ratings.forEach((r, i) => L.push(`| ${i + 1} | ${r.id} | ${r.rating.toFixed(0)} | ${r.lo.toFixed(0)}–${r.hi.toFixed(0)} | ${r.games} | ${r.score.toFixed(1)} |`));
-  L.push("");
+  s.ratings.filter((r) => !s.excluded.has(r.id)).forEach((r, i) => L.push(`| ${i + 1} | ${r.id} | ${r.rating.toFixed(0)} | ${r.lo.toFixed(0)}–${r.hi.toFixed(0)} | ${r.games} | ${r.score.toFixed(1)} |`));
+  if (s.excluded.size) {
+    const pc = (x: number) => `${(100 * x).toFixed(1)}%`;
+    L.push("", `**Excluded from the leaderboard**: forfeits + fallbacks + API errors above ${pc(s.maxFailureRate)} of the seat's decisions (\`event.maxFailureRate\`), so the seat often didn't play as configured. Its games still count for its opponents' ratings; its numbers are kept here.`, "");
+    L.push("| Seat | Rating | 95% CI | Games | Score | Failure rate | Forfeits | Fallbacks | API errors | Decisions |", "|---|---|---|---|---|---|---|---|---|---|");
+    for (const [seat, x] of [...s.excluded.entries()].sort((a, b) => b[1].rate - a[1].rate)) {
+      const r = s.ratings.find((r) => r.id === seat);
+      L.push(`| ${seat} | ${r ? r.rating.toFixed(0) : "–"} | ${r ? `${r.lo.toFixed(0)}–${r.hi.toFixed(0)}` : "–"} | ${r?.games ?? 0} | ${r ? r.score.toFixed(1) : "–"} | ${pc(x.rate)} | ${x.forfeits} | ${x.fallbacks} | ${x.apiErrors} | ${x.decisions} |`);
+    }
+  }
+  L.push("", nPods > 1
+    ? `The bootstrap resamples the ${nPods} pods, then matches within each drawn pod: a seat plays one deck for a whole pod, so pods are the replication unit.`
+    : "One pod: the bootstrap resamples matches within it, so the CI leaves out pod-to-pod variation (the deck a seat drafted); see docs/ANALYTICS.md before comparing seats.", "");
+  if ([...s.bySeat.values()].some((a) => BOT_VERSIONS[a.provider])) {
+    // The tags src/agents/bots.ts reads: keep this list in step with it.
+    L.push("**Information asymmetry.** Bot seats get computed hints that LLM seats never see (by design: computed assessments stay out of prompts, HANDOFF §6 2026-10-01). "
+      + "rank-bot reads, per option: `type`, `cmc` and `sorcerySpeedOk` (priority), `keep` (mulligan), `toughness` and `evasive` (attackers), `attackerPower`, `blockerSurvives` and `killsAttacker` (blockers), `hostile` (targets); "
+      + "per question: `handLands` and `handSize` (mulligan), `opponentMaxUntappedPower` (attacks), `incomingLethal` (blocks). random reads none. "
+      + "forge-ai's games are played by Forge's own AI, which makes its own evaluations of the game. Read bot-vs-LLM ratings with this in mind.", "");
+  }
+  if (nPods > 1) {
+    L.push("### Ratings by pod", "", "Each pod fitted on its own. The SD across pods is how far a rating moves from one pod to the next; for identical bots it is the benchmark's noise floor.", "");
+    L.push(`| Seat | ${s.byPod.pods.map((p) => podLabel(p, s.merged)).join(" | ")} | SD between pods |`, `|---|${s.byPod.pods.map(() => "---|").join("")}---|`);
+    for (const r of s.ratings) {
+      const rs = s.byPod.ratings.get(r.id) ?? [];
+      L.push(`| ${r.id} | ${s.byPod.pods.map((_, i) => (rs[i] === undefined ? "–" : rs[i]!.toFixed(0))).join(" | ")} | ${s.byPod.sd.has(r.id) ? s.byPod.sd.get(r.id)!.toFixed(0) : "–"} |`);
+    }
+    L.push("");
+  }
   if (s.censored.size) {
-    const n = s.matches.filter((m) => m.error).length;
-    L.push(`**Censored: ${n} match(es) ended in an error** and are left out of the ratings and standings entirely, including the games they finished (policy in docs/ANALYTICS.md). Errors cut off long matches, so a seat with many censored matches may be rated on a biased sample.`, "");
-    L.push("| Seat | Censored matches | Finished games left out |", "|---|---|---|");
-    for (const [seat, c] of [...s.censored.entries()].sort()) L.push(`| ${seat} | ${c.matches} | ${c.games} |`);
+    const sum = (f: "matches" | "replayed") => [...s.censored.values()].reduce((a, c) => a + c[f], 0) / 2;
+    const replays = s.matches.filter((m) => m.replayOf);
+    L.push(`**Errored matches: ${sum("replayed")} replayed, ${sum("matches")} censored.** A match that errors for a reason other than a harness bug (provider error, match timeout, bridge crash) is played again from scratch with the same decks and seed at the end of its round (${replays.filter((m) => !m.error).length} of ${replays.length} replay(s) completed). A match whose replay errors too, or that hit a harness bug, is censored: left out of the ratings and standings entirely, including the games it finished (policy in docs/ANALYTICS.md). Errors cut off long matches, so a seat with many censored matches may be rated on a biased sample.`, "");
+    L.push("| Seat | Replayed | Censored matches | Finished games left out |", "|---|---|---|---|");
+    for (const [seat, c] of [...s.censored.entries()].sort()) L.push(`| ${seat} | ${c.replayed} | ${c.matches} | ${c.games} |`);
+    L.push("");
+  }
+  if (s.notPlayed.size) {
+    L.push(`**Not played: ${s.matches.filter((m) => m.notPlayed).length} match(es)**, because a seat went over its budget (\`maxSpendUsd\` / \`maxP95LatencySec\`): ${[...s.overBudget.entries()].map(([seat, why]) => `${seat} (${why})`).join("; ")}. A match not played has no result for either seat (no forfeit) and isn't in the ratings or standings; an over-budget seat's later draft picks and decks are rank-bot fallbacks.`, "");
+    L.push("| Seat | Matches not played |", "|---|---|");
+    for (const [seat, n] of [...s.notPlayed.entries()].sort()) L.push(`| ${seat} | ${n} |`);
     L.push("");
   }
 
@@ -346,11 +430,16 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
   const turns = s.games.map((g) => g.turns);
   L.push(`Average length: ${turns.length ? (turns.reduce((a, b) => a + b, 0) / turns.length).toFixed(1) : "–"} turns · On-the-play win rate: ${s.playWinRate === null ? "–" : `${(100 * s.playWinRate).toFixed(1)}%`}`);
   L.push(`End reasons: ${Object.entries(s.reasons).map(([r, n]) => `${r} ${n}`).join(", ") || "–"}`);
+  const capped = [...s.cappedDraws.values()].reduce((a, b) => a + b, 0) / 2;
+  L.push("", `Turn-cap draws: ${capped ? `${capped} game(s); by seat: ${[...s.cappedDraws.entries()].sort().map(([seat, n]) => `${seat} ${n}`).join(", ")}` : "none"}. A drawn game counts half a win for each seat in the ratings.`);
   const errs = s.matches.filter((m) => m.error);
   if (errs.length) L.push("", `**${errs.length} match(es) failed:** ${errs.slice(0, 5).map((m) => `${m.matchId}: ${m.error}`).join("; ")}`);
 
   L.push("", "## Versions", "");
-  for (const v of s.versions) L.push(`- ${s.versions.length > 1 ? `${v.run}: ` : ""}${v.provenance ? describeProvenance(v.provenance) : "not recorded (run predates version provenance)"}`);
+  for (const v of s.versions) {
+    const anchors = [...new Set(Object.values(v.anchors ?? {}))].sort().join(", ");
+    L.push(`- ${s.versions.length > 1 ? `${v.run}: ` : ""}${v.provenance ? describeProvenance(v.provenance) : "not recorded (run predates version provenance)"}${anchors ? ` · anchors ${anchors}` : ""}${v.configHash ? ` · config hash ${v.configHash.slice(0, 12)}` : ""}`);
+  }
   return L.join("\n") + "\n";
 }
 
@@ -362,6 +451,11 @@ export function writeReport(runDir: string, cfg?: BenchConfig) {
     specViolations: s.specViolations.size ? Object.fromEntries([...s.specViolations.entries()].map(([k, v]) => [k, { ...v, what: Object.fromEntries(v.what) }])) : undefined,
     versions: s.versions,
     ratings: s.ratings,
+    podRatings: s.byPod.pods.length > 1 ? { pods: s.byPod.pods.map((p) => podLabel(p, s.merged)), ratings: Object.fromEntries(s.byPod.ratings), sdBetweenPods: Object.fromEntries(s.byPod.sd) } : undefined,
+    excluded: s.excluded.size ? { maxFailureRate: s.maxFailureRate, seats: Object.fromEntries(s.excluded) } : undefined,
+    cappedDraws: Object.fromEntries(s.cappedDraws),
+    overBudget: s.overBudget.size ? Object.fromEntries(s.overBudget) : undefined,
+    notPlayed: s.notPlayed.size ? Object.fromEntries(s.notPlayed) : undefined,
     censored: Object.fromEntries(s.censored),
     seats: Object.fromEntries([...s.bySeat.entries()].map(([id, a]) => [id, { ...a, latencies: undefined, p50LatencyMs: pct(a.latencies, 0.5), p95LatencyMs: pct(a.latencies, 0.95) }])),
     games: s.games.length, reasons: s.reasons, playWinRate: s.playWinRate,

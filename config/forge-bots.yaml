@@ -36,7 +36,7 @@ engine:
   # bridgeJar: bridge/build/mtg-bench-bridge.jar                          # default
   java: /home/linuxbrew/.linuxbrew/opt/openjdk@17/bin/java
   javaOpts: ["-Xmx3g"]
-  matchTimeoutSec: 7200
+  gameTimeoutSec: 3600            # wall-clock budget per game; the match cap is gamesPerMatch × this (matchTimeoutSec overrides)
 
 outputDir: runs
 

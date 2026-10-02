@@ -83,6 +83,8 @@ bridge/build.sh <path to forge-gui-desktop-*-jar-with-dependencies.jar>
 ```
 **Done when** `bridge/build/mtg-bench-bridge.jar` exists. If javac fails, fix the bridge to match the Forge APIs. Keep the behaviour described in the class comments.
 
+**After any Forge bump or bridge change**, run `npm run bench -- conformance <bot config>` (docs/FORGE_SETUP.md "Conformance check"); it must pass against `conformance/baseline.forge.json` before real runs.
+
 ### T5. Mock smoke test (no Forge, no keys)
 ```bash
 npm run bench -- run config/smoke.mock.yaml --forge-res <forge>/res --run-id smoke-mock
@@ -141,7 +143,7 @@ Write a short report: what you changed and why, the T6/T7 numbers, and anything 
 
 ## 5. Map of the code
 ```
-src/cli.ts                    commands: cards index | cubes | check | run | report | rate
+src/cli.ts                    commands: cards index | cubes | check | run | match | report | rate | conformance
 src/config.ts                 event YAML schema + validation (8 seats, knowledge, format, mana/priority options)
 src/types.ts                  DecisionRequest/Response contract + validation
 src/agents/agent.ts           Seat wrapper: auto-resolve, validation, fallback, notes, analytics
@@ -151,7 +153,7 @@ src/agents/providers/         anthropic.ts, openai.ts (OpenAI-compatible), echo.
 src/agents/bots.ts            random / rank-bot / forge-ai drafting+building policies
 src/knowledge/                lookup_card / search_cube / search_rules tools, CR index
 src/draft/ src/deckbuild/     draft (3×15, passing) and deckbuilding
-src/tournament/               run.ts (event loop), resume.ts (--decks-from / --pools-from), schedule.ts (round robin / Swiss)
+src/tournament/               run.ts (event loop), match.ts (head-to-head), resume.ts (--decks-from / --pools-from), schedule.ts (round robin / Swiss), conformance.ts (bridge check)
 src/engine/forge/forge.ts     spawns the bridge JVM, TCP protocol, delegation capture
 src/engine/mock/mock.ts       simplified engine (testing only)
 src/analytics/                recorder.ts (JSONL), report.ts (report.md / summary.json)
@@ -161,6 +163,7 @@ bridge/src/forge/bridge/      AgentBridge (main), PlayerControllerExternal (all 
                               BridgeClient (socket), LobbyPlayerExternal, MatchContext
 prompts/v1/                   versioned prompt templates
 config/                       smoke.mock.yaml, forge-bots.yaml, forge-1llm.yaml, event.example.yaml
+conformance/                  fixed decks + baseline for `bench conformance`
 ```
 
 ---
@@ -168,6 +171,14 @@ config/                       smoke.mock.yaml, forge-bots.yaml, forge-1llm.yaml,
 ## 6. Decisions log (owner decisions, newest first)
 
 ### 2026-10-02
+- **Bridge conformance check after any Forge bump** (MB-010). `bench conformance <config>` plays four fixed bot matches (fixed decks in `conformance/decks/`, fixed seeds and event settings) and compares them with `conformance/baseline.forge.json`, recorded on Forge 2ccbbb01326e: exact on match errors, engine exceptions, bridge errors and new game-end kinds, tolerant on game and decision counts (same seed isn't guaranteed to replay the same games, though six runs on this commit were identical). `--update` re-records the baseline once a difference is understood.
+- **Events can be pre-registered by config hash** (MB-012). `run_start.configHash` is the SHA-256 of the effective config (event, seats, pricing, engine settings; no machine paths); `check` prints it, report.md shows it, and `run --expect-hash <h>` refuses any other config. **Exclusion rule:** a seat whose forfeits + fallbacks + API errors exceed `event.maxFailureRate` (default 5%) of its decisions is listed apart from the leaderboard, its numbers kept. The rest of MB-012 is split into MB-039 (ablations), MB-040 (draft/play decomposition), MB-041 (human baseline), MB-042 (held-out cube).
+- **The report states the bot-hint asymmetry** (MB-009): an "Information asymmetry" note under the ratings lists the computed tags rank-bot reads that LLM seats never see. A held-out cube is future work (§7), the cube being the owner's choice.
+- **Per-seat budgets stop the seat, not the run** (MB-011). `maxSpendUsd` (computed cost, needs `pricing`) and `maxP95LatencySec` (after 20 decisions) on a seat. Once over, the seat stays stopped (`seat_over_budget` event): its remaining matches are recorded as not played (no games, no result for either seat, no forfeit), and its draft picks and decks in later pods are rank-bot fallbacks. Checked before each match and each non-game decision, so a match in progress finishes. report.md lists matches not played per seat.
+- **Errored matches are replayed once before they're censored** (MB-006, MB-014). A match that errors for any reason but a harness bug (`errorKind` infra / timeout / bridge) is played again from scratch, same seats, decks and seed, at the end of its round (`<id>-replay`, `replayOf`); the replay stands in for it. Only a replay that errors too, or a harness bug, is censored. The match timeout is now `gamesPerMatch` × `engine.gameTimeoutSec` (default 60 min a game, 3 h for best-of-3) unless `matchTimeoutSec` is set; the configs drop their fixed 2 h.
+- **Anchors are versioned and never pooled across versions or cubes** (MB-002). Each bot seat records `run_start.anchors` (`rank-bot@human-v2`: provider, tag path `mock` / `human` / `ai`, policy version from `BOT_VERSIONS` in bots.ts). Bump the version when bots.ts's policy or the bridge's bot tags change. `report` / `rate` refuse runs whose anchors or cube differ (older runs count as `unrecorded`) unless `--allow-anchor-changes`. Current: random v1, rank-bot v2 (this week's targeting/delve/sorcery-speed changes), forge-ai v1.
+- **Pods are the replication unit** (MB-001). With more than one pod the headline bootstrap resamples pods, then matches within each drawn pod; report.md adds "Ratings by pod" (each pod fitted alone) and each seat's SD between pods, the noise floor for identical bots. A one-pod CI leaves out pod-to-pod variation and says so. Policy in `docs/ANALYTICS.md`.
+- **Turn-cap draws count half a win to each seat** (MB-007): BT scores a drawn game 0.5 (a drawn match 0.5 at match level), as before; draws are kept because letting games stall is part of a seat's play. report.md lists turn-cap draws per seat.
 - **Provider failures are infrastructure, never the agent's answer** (MB-003). HTTP 200 bodies with `finish_reason: "error"`, an `error` object, or no content, no tool calls and no output tokens are retried by the provider layer like a 5xx; each failed attempt is a `usage.jsonl` row with `error` (the report's "API errors"); a persistent failure abandons the match. Found in `sanity-gemini-flash-lite`: 78 such calls had been nudged as bad answers and ended as forfeits.
 - **Output caps leave room for reasoning; truncated answers are asked again** (MB-003). Reasoning and the answer share `maxTokens`, so the default is 4096 with reasoning disabled and 16384 when it may be on (`maxTokensFor` in `src/config.ts`); a seat's `maxTokens` still overrides it. A `length` / `max_tokens` stop is marked `truncated` and the call is repeated once with twice the cap (up to 32768).
 - **The decision timeout is a chess clock** (MB-014). `decisionTimeoutSec` counts model time only: the clock pauses while the provider layer backs off and is refunded failed attempts. Running out forfeits that decision (`timedOut`, reason in `error`); it no longer abandons the match. The second retry layer in `llm.ts` is gone, retry sleeps honour the abort signal, and `Retry-After` is capped at 60 s.
@@ -182,7 +193,7 @@ config/                       smoke.mock.yaml, forge-bots.yaml, forge-1llm.yaml,
 - **The human bridge never hands a choice to Forge's helper buttons** (MB-030). "End Turn" / "Undo" at priority made Forge pass every later priority of the turn and skip the attack, unrecorded (1,852 such decisions in the run data); the revealed-hand confirm's "End Turn", the London mulligan's "Auto" and the attack screen's "Alpha Strike" / "Call Back" are gone too. Revealed hands are acknowledged (forced), Forge's yield suggestions declined (policy).
 - **Null actions on the human bridge** (MB-032, MB-035): pass at priority, keep at a mulligan, "no" to a yes/no question (ids `yes`/`no`), "play" at play/draw, Cancel during a cast; a selection without Cancel (edict, forced discard) gets the harness's first legal choices, clicked like an answer. OK is never pressed while Forge shows it disabled.
 - **Attacks and blocks are validated before OK and asked as a whole set** (MB-031, MB-037): the seat's earlier declarations are undone before each ask, Forge's `validateAttackers` / `validateBlocks` runs before confirming and its reason goes back to the agent; `maxRetries` re-asks per combat step, then no attack / no blocks (forfeit) or, if a requirement makes that illegal, Forge's AI (delegated).
-- **Turn cap on every path** (MB-007): past `maxGameTurns` the bridge ends the game as a draw for both players, end reason "Draw (turn cap of N turns)". Forge marks every player without an outcome as a winner, so the AI-controller path's cap had been recording the draw as a win; fixed too. How draws enter the ratings is still open (rating code).
+- **Turn cap on every path** (MB-007): past `maxGameTurns` the bridge ends the game as a draw for both players, end reason "Draw (turn cap of N turns)". Forge marks every player without an outcome as a winner, so the AI-controller path's cap had been recording the draw as a win; fixed too. How draws enter the ratings: see "Turn-cap draws count half a win" above.
 - **Notifications are information, not rejections** (MB-033, MB-036): reveals and Forge's notifications go into the next prompt as "Since your last decision: ..."; only error dialogs, illegal clicks and invalid cost payments read as "Forge rejected your last choice".
 - **Affordability filters, one level down** (MB-002, MB-005): a card's unaffordable abilities (evoke, suspend...) and optional costs (kicker...) aren't offered, as at priority; convoke/improvise/delve spells use an estimate (mana + helpers, colours unchecked) instead of being offered unfiltered. Every card or ability kept off a question is counted as policy, so the filters' reach is visible. `prompts/v2/game.md` now describes these rules and the priority stops (it assumes `priorityStops: smart`, `manaPayment: smart`).
 - **rank-bot on the human bridge** (MB-002, MB-013): the bridge produces the tags rank-bot reads (`sorcerySpeedOk`, mulligan `keep` + `handLands`/`handSize`, `hostile`), and rank-bot never answers `[]` to a target question, delves greedily. `sorcerySpeedOk` is literal (own main phase, empty stack), so rank-bot now casts only at sorcery speed. Its behaviour, and so its anchor ratings, differ from earlier runs: don't pool rank-bot ratings across this change.
@@ -198,6 +209,10 @@ config/                       smoke.mock.yaml, forge-bots.yaml, forge-1llm.yaml,
 - **Iterate gameplay with `bench match`** (fixed decks, no draft) on a cheap model: DeepSeek V4 Flash via OpenRouter, reasoning off, host pinned to one fp8 provider (Baidu). The report's reported-cost column is OpenRouter's actual charge.
 
 ## 7. Future work
+
+- **A held-out cube condition** (MB-009, MB-042; the owner's call which cube). Hiding the cube name buys little: models recognise well-known cubes from the card list (DeepSeek's Pauper-cube brief named its archetypes), so results on public cubes partly measure memorised cube knowledge. A held-out condition would use a cube no model can have seen: a fresh card mix (e.g. a random sample from a large card pool, or a private list) that keeps the same rules and the same anchors, reported separately from the public-cube results (anchor versions already refuse to pool across cubes).
+
+- **An anchor independent of harness tags** (MB-002). rank-bot reads tags the bridge computes, so its strength moves with the bridge (hence anchor versions). A steadier anchor: Forge's own drafting (`BoosterDraftAI`) plus Forge's AI in play, or fixed published decks piloted by Forge's AI.
 
 - **Competitive-REL information tier** (decided 2026-10-01 to defer as over-complicated for now). At Competitive REL, derived information (current characteristics, zone counts, Oracle text) is something a player is entitled to but must work out or look up. A `competitive` option would show only status and free information in the prompt (names, counters, tapped/attached/zone, life, phase, score) and make derived information available through tools (`inspect(card)` for a permanent's current characteristics, zone counts, `lookup_card`), testing whether a model checks before acting. Sources: MTR 4.1 (https://blogs.magicjudges.org/rules/mtr4-1/).
 - **Remove the AI-controller bridge** (`PlayerControllerExternal`, `AgentCostDecision`, `engine.controller: ai`) once a few more human-path events have run; then drop the "both bridges" columns from `docs/DECISION-PROVENANCE.md`.

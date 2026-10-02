@@ -2,6 +2,7 @@
  * Benchmark configuration (YAML). See docs/AGENTS.md for the full reference
  * and config/event.example.yaml for a filled-in example.
  */
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
@@ -36,6 +37,14 @@ export interface SeatConfig {
   headers?: Record<string, string>;
   /** Max concurrent in-flight model calls for this seat (rate-limit guard); unset = no limit. Queue time isn't charged to the agent. */
   concurrency?: number;
+  /**
+   * Budgets. Once the seat's computed cost (tokens × `pricing`) reaches maxSpendUsd, or the p95 of its decision latency
+   * exceeds maxP95LatencySec (over at least 20 decisions), its remaining matches aren't played (recorded as not played,
+   * no result for either seat) and any later draft picks and deckbuilds are rank-bot fallbacks. Checked before each
+   * match and decision outside games, so a match in progress finishes. Unset = no limit.
+   */
+  maxSpendUsd?: number;
+  maxP95LatencySec?: number;
   /** Per-seat overrides of event.maxToolCallsPerDecision etc. are deliberately NOT allowed: same rules for everyone. */
 }
 
@@ -70,6 +79,8 @@ export interface EventConfig {
   priorityStops: "smart" | "all";
   /** Forge: smart = ask which lands to tap only when the choice can matter; always = every payment. */
   manaPayment: "smart" | "always";
+  /** Report: a seat whose forfeits + fallbacks + API errors exceed this share of its decisions is listed apart from the leaderboard. */
+  maxFailureRate: number;
 }
 
 export interface EngineConfig {
@@ -82,7 +93,9 @@ export interface EngineConfig {
   /** Which Forge controller agent seats use: "human" (default: Forge's human controller + headless screen) or "ai" (PlayerControllerExternal, kept for comparison). */
   controller?: "ai" | "human";
   javaOpts?: string[];
-  matchTimeoutSec?: number;      // hard wall-clock cap per match
+  /** Wall-clock budget per game, used to size the match cap: gamesPerMatch × this (default 3600, i.e. 60 min a game). */
+  gameTimeoutSec?: number;
+  matchTimeoutSec?: number;      // hard wall-clock cap per match; overrides gamesPerMatch × gameTimeoutSec
   /** Seats whose in-game decisions go to Forge AI even if they're LLMs (debug). */
 }
 
@@ -101,7 +114,7 @@ const EVENT_DEFAULTS: Omit<EventConfig, "name" | "cube"> = {
   pods: 1, seed: 1, packs: 3, packSize: 15, format: "round-robin", rounds: 3, gamesPerMatch: 3, minDeckSize: 40,
   knowledge: "oracle+tools", promptVersion: "v2", maxToolCallsPerDecision: 6, maxRetries: 3,
   decisionTimeoutSec: 180, carryNotes: true, maxGameTurns: 40, recordPrompts: false, rotateSeats: true,
-  cubeStudy: true, briefMaxWords: 1000, briefScope: "all", parallelMatches: 4, priorityStops: "smart", manaPayment: "smart",
+  cubeStudy: true, briefMaxWords: 1000, briefScope: "all", parallelMatches: 4, priorityStops: "smart", manaPayment: "smart", maxFailureRate: 0.05,
 };
 
 export function loadConfig(file: string): BenchConfig {
@@ -148,6 +161,8 @@ export function validateConfig(cfg: BenchConfig) {
     if (llm && !s.model) errs.push(`${where}: model is required for provider ${s.provider}`);
     if (llm && !s.apiKeyEnv && !s.baseUrl) errs.push(`${where}: apiKeyEnv is required for provider ${s.provider}`);
     if (s.concurrency !== undefined && !(Number.isInteger(s.concurrency) && s.concurrency > 0)) errs.push(`${where}: concurrency must be a positive integer`);
+    for (const k of ["maxSpendUsd", "maxP95LatencySec"] as const) if (s[k] !== undefined && !(typeof s[k] === "number" && s[k]! > 0)) errs.push(`${where}: ${k} must be a positive number`);
+    if (s.maxSpendUsd !== undefined && !cfg.pricing[s.model ?? s.provider]) errs.push(`${where}: maxSpendUsd needs a pricing entry for model ${s.model ?? s.provider}`);
     if ((s as any).apiKey) errs.push(`${where}: put the key in an env var and reference it with apiKeyEnv, not apiKey`);
   }
   if (cfg.event.packs * cfg.event.packSize * podSize > 100000) errs.push("pod is unreasonably large");
@@ -156,6 +171,18 @@ export function validateConfig(cfg: BenchConfig) {
   if (cfg.event.format === "swiss" && !(Number.isInteger(cfg.event.rounds) && cfg.event.rounds >= 1 && cfg.event.rounds <= podSize - 1)) errs.push(`event.rounds must be 1–${podSize - 1} for Swiss (${podSize} seats)`);
   if (cfg.engine.type === "forge" && !cfg.engine.forgeDir) errs.push("engine.forgeDir is required when engine.type is forge");
   if (errs.length) throw new Error("Invalid config:\n  - " + errs.join("\n  - "));
+}
+
+/**
+ * Pre-registration hash: SHA-256 of the effective config with keys sorted, covering everything that shapes the
+ * experiment (event, seats, pricing, engine settings) but not where it runs: outputDir, forgeRes and the engine's
+ * forgeDir / forgeJar / bridgeJar / java / javaOpts are left out (the run id isn't in the config).
+ */
+export function configHash(cfg: BenchConfig): string {
+  const { forgeDir, forgeJar, bridgeJar, java, javaOpts, ...engine } = cfg.engine;
+  const sorted = (v: unknown): unknown => Array.isArray(v) ? v.map(sorted)
+    : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sorted((v as any)[k])])) : v;
+  return crypto.createHash("sha256").update(JSON.stringify(sorted({ event: cfg.event, engine, seats: cfg.seats, pricing: cfg.pricing }))).digest("hex");
 }
 
 /** The seat's config switches reasoning off (OpenRouter's unified `reasoning` field, OpenAI's effort, or Anthropic without thinking). */

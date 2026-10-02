@@ -17,7 +17,11 @@ seats:
     extraBody: { top_p: 0.9 }  # optional, merged into every request body (provider-specific knobs)
     label: "Opus (thinking)"   # optional, display name
     concurrency: 2             # optional, max model calls in flight for this seat (rate-limit guard; default no limit)
+    maxSpendUsd: 50            # optional, stop the seat once its computed cost reaches this (needs a pricing entry)
+    maxP95LatencySec: 60       # optional, stop the seat once its p95 decision latency exceeds this (after 20 decisions)
 ```
+
+**Budgets stop a seat, not the run.** Once a seat reaches `maxSpendUsd` (tokens × `pricing`, counted from the run's start) or its p95 decision latency exceeds `maxP95LatencySec`, it stays stopped: each of its remaining matches is recorded as not played (`notPlayed` in `matches.jsonl`; no games, no result for either seat, no forfeit) and the rest of the event goes on. Later draft picks and deckbuilds in other pods are rank-bot fallbacks so the pod can still draft. The check runs before each match and each decision outside games, so a match already under way finishes: a seat can overshoot by about one match's cost. report.md lists the matches not played per seat and why.
 
 **Reasoning and host are part of the seat's spec.** Reasoning counts as disabled when `extraBody.reasoning` has
 `enabled: false`, `max_tokens: 0` or `effort: "none"` (or `reasoningEffort: none`, or Anthropic without
@@ -54,7 +58,7 @@ Every LLM must support **tool/function calling**. Answers are submitted through 
 
 ## Recommended line-ups
 
-- **Comparing 5 LLMs:** 5 LLM seats plus `forge-ai`, `rank-bot` and `random` as anchors. The anchors cost nothing and pin the rating scale, so numbers from different runs and benchmark versions stay comparable.
+- **Comparing 5 LLMs:** 5 LLM seats plus `forge-ai`, `rank-bot` and `random` as anchors. The anchors cost nothing and pin the rating scale across runs, but only while the anchors themselves don't change: each bot seat records an anchor version (`rank-bot@human-v2`; docs/ANALYTICS.md "Anchor versions"), and runs with different anchor versions or cubes aren't pooled.
 - **Comparing 8 LLMs:** allowed, but keep at least one anchor in some pods (e.g. alternate line-ups across runs) so ratings stay anchored.
 - **Ablations:** the same model can take several seats with different settings, e.g. `opus-think` (with `thinkingBudget`) vs `opus-nothink`. Seat ids must differ. Cube study and knowledge level are per-event settings, not per-seat, so run those comparisons as separate events.
 
@@ -77,6 +81,8 @@ There are two kinds of substitution, and both are reported:
 Per decision the harness validates the answer. An illegal answer (including a malformed `choice` or unparseable tool arguments) is sent back with the reason ("unknown option id …") and the agent may try again, up to `maxRetries`. After that, or when the decision's time budget (`decisionTimeoutSec`) runs out, the decision is forfeited: the null action in games, `rank-bot`'s deck in deckbuilding. The decision row keeps the reason in `error`.
 
 The time budget works like a chess clock: it counts the model's time only. Provider failures are not the agent's: 429, 408, 529, 5xx, network errors and in-body errors (HTTP 200 with `finish_reason: "error"`, or an empty answer with no output tokens) are retried with exponential backoff, honouring `Retry-After` (capped at 60 s); the clock is paused while backing off and doesn't count failed attempts. A provider that keeps failing abandons the match as an infrastructure error. An answer cut off by the output cap (`length` / `max_tokens`) is asked again once with twice the cap (up to 32768) and marked `truncated`. An exception inside the harness (rendering, templates, the prompt-leak guard) abandons the match as a harness error rather than counting as a forfeit.
+
+An abandoned match that wasn't a harness bug (provider failure, match timeout, bridge crash) is replayed once from scratch, same decks and seed, at the end of its round; if the replay fails too it is censored (docs/ANALYTICS.md). The match timeout is `engine.matchTimeoutSec` if set, else `gamesPerMatch` × `engine.gameTimeoutSec` (default 3600 s, i.e. 60 minutes a game: 3 h for best-of-3). Raise `gameTimeoutSec` for slow seats (reasoning models, two LLMs in one match) rather than letting their long matches be cut off.
 
 ## Cost planning
 

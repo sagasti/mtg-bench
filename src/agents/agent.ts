@@ -3,10 +3,10 @@
  * the parts that must be identical for everyone: auto-resolving forced
  * choices, validation, fallback on failure, notes carry-over, and analytics.
  */
-import { type CallRecord, type TokenUsage, ZERO_USAGE, type Recorder } from "../analytics/recorder.ts";
-import type { EventConfig, SeatConfig } from "../config.ts";
+import { type CallRecord, costOf, type TokenUsage, ZERO_USAGE, type Recorder } from "../analytics/recorder.ts";
+import type { EventConfig, Pricing, SeatConfig } from "../config.ts";
 import { type DecisionRequest, type DecisionResponse, type DecideContext, validateResponse } from "../types.ts";
-import { debug } from "../util/log.ts";
+import { debug, info } from "../util/log.ts";
 import type { Bot } from "./bots.ts";
 import { type LlmAgent, type MatchNotesInput, type StudyResult } from "./llm.ts";
 import { hasPrompt } from "./render.ts";
@@ -47,12 +47,18 @@ export class Seat {
   private matchNotes = new Map<string, string>();
   /** This seat's own pre-draft cube strategy brief (null = none / study disabled / failed). */
   brief: string | null = null;
+  /** Computed cost so far and model-answered decision latencies, for the seat's budgets. */
+  private spentUsd = 0;
+  private latencies: number[] = [];
+  /** Set once the seat goes over a budget; it stays stopped. */
+  private stopped: string | null = null;
   constructor(
     readonly config: SeatConfig,
     readonly agent: DecisionAgent,
     private fallback: Bot,
     private recorder: Recorder,
     private event: EventConfig,
+    private pricing: Record<string, Pricing> = {},
   ) {}
 
   get id() { return this.config.id; }
@@ -61,6 +67,27 @@ export class Seat {
   /** True when Forge's own AI should play this seat's games. */
   get usesForgeAi() { return this.config.provider === "forge-ai"; }
   get isLlm() { return typeof (this.agent as any).study === "function"; }
+
+  /**
+   * Why the seat is over its spend or latency budget (SeatConfig.maxSpendUsd / maxP95LatencySec), or null. Sticky: the
+   * first time it trips, a `seat_over_budget` event is recorded and the seat stays stopped for the rest of the run.
+   */
+  overBudget(): string | null {
+    if (this.stopped) return this.stopped;
+    const { maxSpendUsd, maxP95LatencySec } = this.config;
+    let why: string | null = null;
+    if (maxSpendUsd !== undefined && this.spentUsd >= maxSpendUsd) why = `spent $${this.spentUsd.toFixed(4)}, budget $${maxSpendUsd}`;
+    else if (maxP95LatencySec !== undefined && this.latencies.length >= 20) {
+      const p95 = [...this.latencies].sort((a, b) => a - b)[Math.floor(0.95 * this.latencies.length)] / 1000;
+      if (p95 > maxP95LatencySec) why = `p95 decision latency ${p95.toFixed(1)}s over ${this.latencies.length} decisions, budget ${maxP95LatencySec}s`;
+    }
+    if (why) {
+      this.stopped = why;
+      this.recorder.event("seat_over_budget", { seat: this.id, reason: why, spentUsd: this.spentUsd });
+      info(`${this.id} is over budget (${why}): its remaining matches won't be played`);
+    }
+    return why;
+  }
 
   /** Run cube study once; the brief is reused for every pod in this run. */
   async study(cubeCards: string[], pod: number): Promise<string | null> {
@@ -107,6 +134,14 @@ export class Seat {
         valid: true, invalidAttempts: 0, fallback: false, autoResolved: true, modelCalls: 0, toolCalls: {}, latencyMs: 0 });
       return forced;
     }
+    // A seat over budget plays no more matches; a later pod's draft picks and deck still need making, by rank-bot.
+    const stopped = req.phase !== "game" && this.overBudget();
+    if (stopped) {
+      const response = this.fallback.choose(req);
+      this.recorder.decision({ ...base, ...ZERO_USAGE, numOptions: req.options.length, choice: response.choice, choiceLabels: labels(req, response.choice),
+        valid: false, invalidAttempts: 0, fallback: true, autoResolved: false, modelCalls: 0, toolCalls: {}, latencyMs: 0, error: `over budget: ${stopped}` });
+      return response;
+    }
     const t0 = Date.now();
     // Anything the agent throws is a harness error (rendering, templates, the leak guard...): it propagates and the
     // match is abandoned, rather than charged to the agent as a forfeit. Provider failures come back as infraError.
@@ -136,6 +171,7 @@ export class Seat {
       }
     }
     if (response.notes !== undefined) this.notes.set(scope, response.notes);
+    if (result.modelCalls > 0) this.latencies.push(Date.now() - t0);
     this.recorder.decision({
       ...base, ...result.usage, numOptions: req.options.length, choice: response.choice, choiceLabels: labels(req, response.choice),
       valid: !fallback && !forfeit, invalidAttempts: result.invalidAttempts, fallback, forfeit, autoResolved: false, modelCalls: result.modelCalls,
@@ -147,6 +183,7 @@ export class Seat {
   private recordCall(base: Pick<CallRecord, "pod" | "seat" | "provider" | "model" | "phase" | "kind" | "requestId" | "matchId" | "game">, c: CallInfo) {
     const { usage, ...rest } = c;
     this.recorder.call({ ...base, ...usage, ...rest });
+    this.spentUsd += costOf(usage, this.pricing[base.model]) ?? 0;
   }
 
   /** Carry draft notes into deckbuilding explicitly (same scope already, kept for clarity). */

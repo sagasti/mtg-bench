@@ -1,6 +1,7 @@
 /** Head-to-head: two seats play N matches with fixed decks. No study, draft or deckbuilding, so gameplay can be iterated on alone. */
 import fs from "node:fs";
 import path from "node:path";
+import { anchorVersions } from "../agents/bots.ts";
 import { makeSeat } from "../agents/factory.ts";
 import { promptFile } from "../agents/render.ts";
 import type { Seat } from "../agents/agent.ts";
@@ -8,9 +9,9 @@ import { Recorder } from "../analytics/recorder.ts";
 import { writeReport } from "../analytics/report.ts";
 import { loadDb } from "../cards/db.ts";
 import { loadCube, loadRankings, parseCardList } from "../cards/cube.ts";
-import type { BenchConfig } from "../config.ts";
+import { type BenchConfig, configHash } from "../config.ts";
 import { type Deck, deckProblems, saveDeck } from "../deckbuild/deckbuild.ts";
-import type { GameEngine, MatchResult } from "../engine/types.ts";
+import { type GameEngine, type MatchResult, replayable } from "../engine/types.ts";
 import { KnowledgeBase } from "../knowledge/tools.ts";
 import { Jsonl, info } from "../util/log.ts";
 import { collectProvenance } from "../util/provenance.ts";
@@ -47,7 +48,7 @@ export async function runHeadToHead(cfg: BenchConfig, engine: GameEngine, opts: 
   }
   const runDir = freshRunDir(cfg.outputDir, runId, opts.force);
   const provenance = collectProvenance(cfg, engine.name);
-  fs.writeFileSync(path.join(runDir, "config.json"), JSON.stringify({ ...cfg, headToHead: opts, provenance }, null, 2));
+  fs.writeFileSync(path.join(runDir, "config.json"), JSON.stringify({ ...cfg, headToHead: opts, provenance, configHash: configHash(cfg) }, null, 2));
   fs.cpSync(promptFile(ev.promptVersion, ""), path.join(runDir, "prompts"), { recursive: true });
 
   const cube = loadCube(db, ev.cube, cfg.forgeRes);
@@ -66,27 +67,35 @@ export async function runHeadToHead(cfg: BenchConfig, engine: GameEngine, opts: 
   const dckFiles = decks.map((d) => saveDeck(deckDir, d)) as [string, string];
   const matchLog = new Jsonl(path.join(runDir, "matches.jsonl"));
   info(`match ${runId}: ${seats[0].id} (${path.basename(opts.deckFiles[0])}) vs ${seats[1].id} (${path.basename(opts.deckFiles[1])}), ${opts.matches} × bo${ev.gamesPerMatch} (${Math.max(1, opts.parallel ?? ev.parallelMatches)} at a time), engine=${engine.name}`);
-  recorder.event("run_start", { headToHead: true, seats: opts.seats, decks: opts.deckFiles, provenance });
+  recorder.event("run_start", { headToHead: true, seats: opts.seats, decks: opts.deckFiles, provenance, configHash: configHash(cfg), cube: cube.name,
+    anchors: anchorVersions(seats.map((s) => s.config), engine.name, cfg.engine.controller) });
 
   const parallel = Math.max(1, opts.parallel ?? ev.parallelMatches);
   const seeds = Array.from({ length: opts.matches }, (_, m) => rng.fork(`h2h-${m + 1}`).int(2 ** 31));
-  const results = await pool(Array.from({ length: opts.matches }, (_, m) => m), parallel, async (m) => {
-    const matchId = `h2h-${m + 1}-${seats[0].id}-vs-${seats[1].id}`;
+  const playOne = async (m: number, matchId: string, replayOf?: string) => {
     let res: MatchResult;
-    try {
+    const stopped = seats.map((s) => ({ seat: s.id, reason: s.overBudget() })).find((x) => x.reason);
+    if (stopped) res = { matchId, pod: 0, round: m + 1, seats: [seats[0].id, seats[1].id], games: [], winner: null, notPlayed: { seat: stopped.seat, reason: stopped.reason! } };
+    else try {
       res = await engine.playMatch({
         matchId, pod: 0, round: m + 1, seats, decks, deckFiles: dckFiles, gamesPerMatch: ev.gamesPerMatch,
         seed: seeds[m], maxGameTurns: ev.maxGameTurns, runDir,
         priorityStops: ev.priorityStops, manaPayment: ev.manaPayment, maxRetries: ev.maxRetries,
       });
     } catch (e: any) {
-      res = { matchId, pod: 0, round: m + 1, seats: [seats[0].id, seats[1].id], games: [], winner: null, error: String(e?.message ?? e) };
+      res = { matchId, pod: 0, round: m + 1, seats: [seats[0].id, seats[1].id], games: [], winner: null, error: String(e?.message ?? e), errorKind: "harness" };
     }
+    if (replayOf) res.replayOf = replayOf;
     matchLog.write(res);
     const score = res.games.map((g) => (g.winner === 0 ? "W" : g.winner === 1 ? "L" : "D")).join("");
-    info(`  match ${m + 1}: ${res.error ? "censored" : res.winner === 0 ? seats[0].id : res.winner === 1 ? seats[1].id : "draw"} (${score})${res.error ? ` ERROR ${res.error}` : ""}`);
+    const outcome = res.notPlayed ? `not played, ${res.notPlayed.seat} over budget` : res.error ? (replayOf || !replayable(res) ? "censored" : "errored, replaying at the end") : res.winner === 0 ? seats[0].id : res.winner === 1 ? seats[1].id : "draw";
+    info(`  match ${m + 1}${replayOf ? " (replay)" : ""}: ${outcome} (${score})${res.error ? ` ERROR ${res.error}` : ""}`);
     return res;
-  });
+  };
+  const first = await pool(Array.from({ length: opts.matches }, (_, m) => m), parallel, (m) => playOne(m, `h2h-${m + 1}-${seats[0].id}-vs-${seats[1].id}`));
+  // As in an event (tournament/run.ts): a match that errored for a reason other than a harness bug is replayed once.
+  const replays = await pool(first.filter(replayable), parallel, (r) => playOne(r.round - 1, `${r.matchId}-replay`, r.matchId));
+  const results = first.map((r) => replays.find((x) => x.replayOf === r.matchId) ?? r);
   recorder.event("run_end", { matches: results.length });
   matchLog.close(); recorder.close();
   await engine.close?.();
