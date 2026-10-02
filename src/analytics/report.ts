@@ -9,8 +9,8 @@ import path from "node:path";
 import type { BenchConfig, Pricing } from "../config.ts";
 import { scanEngineErrors } from "../engine/forge/log.ts";
 import type { MatchResult } from "../engine/types.ts";
-import { rate } from "../rating/bt.ts";
-import { censoredBySeat, outcomesFromMatches, readMatches } from "../rating/outcomes.ts";
+import { podRatings, rate } from "../rating/bt.ts";
+import { cappedDrawsBySeat, censoredBySeat, outcomesFromMatches, podLabel, readMatches } from "../rating/outcomes.ts";
 import { readJsonl } from "../util/log.ts";
 import { describeProvenance, type Provenance } from "../util/provenance.ts";
 import type { CallRecord, DecisionRecord } from "./recorder.ts";
@@ -141,7 +141,10 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
     specViolations.set(r.seat, v);
   }
 
-  const ratings = rate(outcomesFromMatches(matches), { bootstrap: 500 });
+  const outcomes = outcomesFromMatches(matches);
+  const ratings = rate(outcomes, { bootstrap: 500 });
+  const byPod = podRatings(outcomes);
+  const cappedDraws = cappedDrawsBySeat(matches);
   const censored = censoredBySeat(matches);
   const games = matches.flatMap((m) => m.games);
   const reasons: Record<string, number> = {};
@@ -204,7 +207,7 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
     for (const e of m.engineErrors ?? []) add(engineErrors, `${e.kind} at ${e.at || "?"}`);
   }
 
-  return { incomplete, versions, specViolations, decisions, calls, unrecorded, matches, bySeat, bySeatPhase, byKind, ratings, censored, games, reasons, delegated, forfeited, provenance, engineErrors, matchesWithEngineErrors, playWinRate: decided.length ? playWins / decided.length : null, pricing };
+  return { incomplete, versions, specViolations, decisions, calls, unrecorded, matches, bySeat, bySeatPhase, byKind, ratings, byPod, merged: runDirs.length > 1, cappedDraws, censored, games, reasons, delegated, forfeited, provenance, engineErrors, matchesWithEngineErrors, playWinRate: decided.length ? playWins / decided.length : null, pricing };
 }
 
 export function renderReport(s: ReturnType<typeof summarize>, title: string): string {
@@ -220,10 +223,22 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
   }
   L.push(`Matches: ${s.matches.length} · Games: ${s.games.length} · Decisions: ${s.decisions.length} · Model calls: ${s.calls.length}`, "");
 
+  const nPods = s.byPod.pods.length;
   L.push("## Ratings (Bradley-Terry, game level, Elo scale, 95% bootstrap CI)", "");
   L.push("| # | Seat | Rating | 95% CI | Games | Score |", "|---|---|---|---|---|---|");
   s.ratings.forEach((r, i) => L.push(`| ${i + 1} | ${r.id} | ${r.rating.toFixed(0)} | ${r.lo.toFixed(0)}–${r.hi.toFixed(0)} | ${r.games} | ${r.score.toFixed(1)} |`));
-  L.push("");
+  L.push("", nPods > 1
+    ? `The bootstrap resamples the ${nPods} pods, then matches within each drawn pod: a seat plays one deck for a whole pod, so pods are the replication unit.`
+    : "One pod: the bootstrap resamples matches within it, so the CI leaves out pod-to-pod variation (the deck a seat drafted); see docs/ANALYTICS.md before comparing seats.", "");
+  if (nPods > 1) {
+    L.push("### Ratings by pod", "", "Each pod fitted on its own. The SD across pods is how far a rating moves from one pod to the next; for identical bots it is the benchmark's noise floor.", "");
+    L.push(`| Seat | ${s.byPod.pods.map((p) => podLabel(p, s.merged)).join(" | ")} | SD between pods |`, `|---|${s.byPod.pods.map(() => "---|").join("")}---|`);
+    for (const r of s.ratings) {
+      const rs = s.byPod.ratings.get(r.id) ?? [];
+      L.push(`| ${r.id} | ${s.byPod.pods.map((_, i) => (rs[i] === undefined ? "–" : rs[i]!.toFixed(0))).join(" | ")} | ${s.byPod.sd.has(r.id) ? s.byPod.sd.get(r.id)!.toFixed(0) : "–"} |`);
+    }
+    L.push("");
+  }
   if (s.censored.size) {
     const n = s.matches.filter((m) => m.error).length;
     L.push(`**Censored: ${n} match(es) ended in an error** and are left out of the ratings and standings entirely, including the games they finished (policy in docs/ANALYTICS.md). Errors cut off long matches, so a seat with many censored matches may be rated on a biased sample.`, "");
@@ -346,6 +361,8 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
   const turns = s.games.map((g) => g.turns);
   L.push(`Average length: ${turns.length ? (turns.reduce((a, b) => a + b, 0) / turns.length).toFixed(1) : "–"} turns · On-the-play win rate: ${s.playWinRate === null ? "–" : `${(100 * s.playWinRate).toFixed(1)}%`}`);
   L.push(`End reasons: ${Object.entries(s.reasons).map(([r, n]) => `${r} ${n}`).join(", ") || "–"}`);
+  const capped = [...s.cappedDraws.values()].reduce((a, b) => a + b, 0) / 2;
+  L.push("", `Turn-cap draws: ${capped ? `${capped} game(s); by seat: ${[...s.cappedDraws.entries()].sort().map(([seat, n]) => `${seat} ${n}`).join(", ")}` : "none"}. A drawn game counts half a win for each seat in the ratings.`);
   const errs = s.matches.filter((m) => m.error);
   if (errs.length) L.push("", `**${errs.length} match(es) failed:** ${errs.slice(0, 5).map((m) => `${m.matchId}: ${m.error}`).join("; ")}`);
 
@@ -362,6 +379,8 @@ export function writeReport(runDir: string, cfg?: BenchConfig) {
     specViolations: s.specViolations.size ? Object.fromEntries([...s.specViolations.entries()].map(([k, v]) => [k, { ...v, what: Object.fromEntries(v.what) }])) : undefined,
     versions: s.versions,
     ratings: s.ratings,
+    podRatings: s.byPod.pods.length > 1 ? { pods: s.byPod.pods.map((p) => podLabel(p, s.merged)), ratings: Object.fromEntries(s.byPod.ratings), sdBetweenPods: Object.fromEntries(s.byPod.sd) } : undefined,
+    cappedDraws: Object.fromEntries(s.cappedDraws),
     censored: Object.fromEntries(s.censored),
     seats: Object.fromEntries([...s.bySeat.entries()].map(([id, a]) => [id, { ...a, latencies: undefined, p50LatencyMs: pct(a.latencies, 0.5), p95LatencyMs: pct(a.latencies, 0.95) }])),
     games: s.games.length, reasons: s.reasons, playWinRate: s.playWinRate,

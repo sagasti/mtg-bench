@@ -35,6 +35,17 @@ A match that ends in an error (`error` set in `matches.jsonl`: match timeout, br
 
 A seat with many censored matches is rated on a biased sample even so; fix the cause and re-run rather than reading its rating.
 
+## Pods are the replication unit
+
+A seat drafts one deck per pod and plays every game of the pod with it, so its games within a pod are correlated through the deck: identical bots differ by 300+ Elo within one pod. Hence:
+
+- **Bootstrap.** With one pod the 95% CI resamples matches (a cluster is run + match id), which leaves out pod-to-pod variation; don't compare seats on a one-pod CI. With more than one pod (one run with `pods: N`, or several runs merged) it resamples pods with replacement, then matches within each drawn pod; a pod is run + pod index.
+- **Per-pod ratings.** report.md ("Ratings by pod") and summary.json (`podRatings`) fit each pod on its own and give each seat's SD between pods. For an all-bot line-up that SD is the noise floor: two seats closer than about two of it can't be told apart by one pod, and pooling N pods shrinks it by roughly √N. Size real events from it.
+
+## Draws
+
+A game that reaches `maxGameTurns` ends as a draw ("Draw (turn cap of N turns)" on the bridge, `turn-cap` on the mock engine). Bradley-Terry scores a drawn game 0.5 for each seat at game level, and a match with equal game wins 0.5 at match level (`rate --level match`); a draw is evidence that the two seats are close, like any other result. Draws aren't dropped, because whether a seat lets games stall is part of its play. The Games section lists turn-cap draws per seat; a seat with many of them is being rated partly on stalled games.
+
 ## Seeds and independent replicates
 
 Packs, seating, pairings and match seeds all derive from `event.seed`, each from its own stream (`pod<N>` → `seating`, `draft`, `swiss<R>`, match id), so drawing one never shifts another. Packs are fixed by design: two events with the same cube and seed draft the same packs in the same seats, which suits paired comparisons and replays but makes them one replicate, not two. Give each event of a series its own seed (e.g. base + event index). `pod_start` records `seed` and `draftSeed` (the seed whose packs the pod played; the source's in a `--decks-from` / `--pools-from` run), and `run_start` records each seat's `temperature` when set. `report` and `rate` refuse to pool runs with a pod of the same cube, draft seed and pod index unless given `--allow-same-seed`.
@@ -43,13 +54,13 @@ Packs, seating, pairings and match seeds all derive from `event.seed`, each from
 
 A run without `run_end` in `events.jsonl`, or with a pod that has `pod_start` but no `pod_end`, stopped early: the report opens with **INCOMPLETE** and `summary.json` lists the reasons under `incomplete`.
 
-1. **Ratings**: Bradley-Terry fit over all games of uncensored matches, Elo scale, 95% bootstrap CI (resampling whole matches; a cluster is run + match id, so merged runs never share one). Censored matches per seat follow the table.
+1. **Ratings**: Bradley-Terry fit over all games of uncensored matches, Elo scale, 95% bootstrap CI (resampling pods, then matches within them, when there is more than one pod; otherwise whole matches; a cluster is run + match id, so merged runs never share one). With several pods, **Ratings by pod** follows: each pod's own fit and each seat's SD between pods. Censored matches per seat follow the table.
 2. **Token usage and cost by seat**: decisions, calls, each token type, tokens/decision, cost, p50/p95 decision latency. Tokens, calls and cost are summed from `usage.jsonl`, so the calls of a decision that ended in an infrastructure error (which has no decision row) still count; the report says how many such calls there were. Decision counts, validity and latency come from `decisions.jsonl`.
 3. **By seat × phase**: study / draft / deckbuild / game split of tokens and cost.
 4. **By decision kind**: average tokens, invalid answers and fallbacks per kind (e.g. are blockers expensive? do models flub targets?).
 5. **Reliability and tool use**: invalid answers, forfeits (a timed-out decision is a forfeit, labelled "timed out" in the forfeit table), bridge re-asks (`attempt > 0` rows: the same in-game step asked again, not a new decision), fallback rate, API errors, truncated calls (stopped at the output-token limit) as a share of calls, decisions abandoned by an infrastructure error (`infraError`; not counted as the agent's anywhere), knowledge-tool calls by tool. Seats whose calls or decisions carry `specViolation` (outside their pinned reasoning regime or host) are listed under **SPEC VIOLATIONS** at the top of the report.
 6. **Decisions made by Forge AI on an agent's behalf**: count per seat, share of that seat's game decisions, and the most common kinds with reasons.
-7. **Games**: average length, on-the-play win rate, end reasons, failed matches.
+7. **Games**: average length, on-the-play win rate, end reasons, turn-cap draws per seat, failed matches.
 
 ## Commands
 
