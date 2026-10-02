@@ -283,6 +283,19 @@ final class InputDriver implements Observer, Runnable {
         }
     }
 
+    /** The cards a targeting input accepts (reflection: private field "choices"), or null for other inputs. */
+    @SuppressWarnings("unchecked")
+    private static java.util.Collection<Card> targetChoices(Input in) {
+        if (!(in instanceof InputSelectTargets)) return null;
+        try {
+            java.lang.reflect.Field f = InputSelectTargets.class.getDeclaredField("choices");
+            f.setAccessible(true);
+            return f.get(in) instanceof java.util.Collection<?> c ? (java.util.Collection<Card>) c : null;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return null;
+        }
+    }
+
     /** Cards already chosen for the bottom in a London mulligan (reflection: private field). */
     private static java.util.Collection<?> londonSelected(Input in) {
         try {
@@ -337,6 +350,7 @@ final class InputDriver implements Observer, Runnable {
                 f.setAccessible(true);
                 return String.valueOf(f.get(in));
             }
+            if (in instanceof InputSelectTargets) return String.valueOf(targetChoices(in));
         } catch (ReflectiveOperationException | RuntimeException e) { return "?"; }
         return "n/a";
     }
@@ -387,25 +401,28 @@ final class InputDriver implements Observer, Runnable {
 
         List<PlayerControllerExternal.Opt> opts = new ArrayList<>();
         List<Card> cards = new ArrayList<>();
-        for (Player p : game.getPlayers()) {
-            cards.addAll(p.getCardsIn(ZoneType.Battlefield));
-            if (p.equals(ch.player)) {
-                cards.addAll(p.getCardsIn(ZoneType.Hand));
-                cards.addAll(p.getCardsIn(ZoneType.Graveyard));
-                cards.addAll(p.getCardsIn(ZoneType.Exile));
-                cards.addAll(p.getCardsIn(ZoneType.Command));
-            }
-        }
         java.util.Collection<?> listChoices = entityList(in, "validChoices");
+        java.util.Collection<Card> targetChoices = targetChoices(in);
         if (listChoices != null) {
             // "Choose from a list" inputs: offer exactly the input's own valid choices (hover text can be empty for them).
-            cards.clear();
             for (Object o : listChoices) if (o instanceof Card lc) cards.add(lc);
-        }
-        if (in instanceof InputLondonMulligan) {
+        } else if (targetChoices != null) {
+            // Targets: the input's own valid cards, in whatever zone and under whoever's control (an opponent's
+            // graveyard, exile...). Forge built the list for this seat, so it holds nothing the seat can't select.
+            cards.addAll(targetChoices);
+        } else if (in instanceof InputLondonMulligan) {
             // Forge's input offers no card actions (a human clicks the hand); the hand is the choice.
-            cards.clear();
             cards.addAll(ch.player.getCardsIn(ZoneType.Hand));
+        } else {
+            for (Player p : game.getPlayers()) {
+                cards.addAll(p.getCardsIn(ZoneType.Battlefield));
+                if (p.equals(ch.player)) {
+                    cards.addAll(p.getCardsIn(ZoneType.Hand));
+                    cards.addAll(p.getCardsIn(ZoneType.Graveyard));
+                    cards.addAll(p.getCardsIn(ZoneType.Exile));
+                    cards.addAll(p.getCardsIn(ZoneType.Command));
+                }
+            }
         }
         for (Card c : cards) {
             String act;
@@ -421,8 +438,10 @@ final class InputDriver implements Observer, Runnable {
             if (in instanceof InputPassPriority && withheld.contains(c.getId())) continue;
             String who = c.getController().equals(ch.player) ? "your " : "opponent's ";
             String zone = c.getZone() != null && c.getZone().getZoneType() != ZoneType.Battlefield ? " [" + c.getZone().getZoneType() + "]" : "";
-            opts.add(new PlayerControllerExternal.Opt(StateView.id(c), act + ": " + who + c.getName() + (c.isCreature() ? " " + c.getNetPower() + "/" + c.getNetToughness() : "")
-                    + (c.isTapped() ? " (tapped)" : "") + zone, c.getName(), botTags(in, c)));
+            // A face-down card the seat may not look at (a morph, a card exiled face down) is named as such.
+            String name = c.isFaceDown() && !c.getView().canFaceDownBeShownTo(ch.player.getView()) ? "face-down card" : c.getName();
+            opts.add(new PlayerControllerExternal.Opt(StateView.id(c), act + ": " + who + name + (c.isCreature() ? " " + c.getNetPower() + "/" + c.getNetToughness() : "")
+                    + (c.isTapped() ? " (tapped)" : "") + zone, name, botTags(in, c)));
         }
         if (in instanceof InputSelectTargets || in instanceof InputSelectEntitiesFromList || in instanceof InputAttack) {
             for (Player p : game.getPlayers()) if (!(in instanceof InputAttack && p.equals(ch.player)) && (listChoices != null ? listChoices.contains(p) : playerSelectable(in, p))) {
