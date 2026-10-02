@@ -18,6 +18,7 @@ import { KnowledgeBase } from "../knowledge/tools.ts";
 import { rate } from "../rating/bt.ts";
 import { outcomesFromMatches } from "../rating/outcomes.ts";
 import { info, Jsonl } from "../util/log.ts";
+import { collectProvenance } from "../util/provenance.ts";
 import { Rng } from "../util/rng.ts";
 import { type RunSource, saveNotes, SourceRun } from "./resume.ts";
 import { roundRobin, swissRound } from "./schedule.ts";
@@ -55,7 +56,8 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
   if (source?.src.mode === "decks") for (let pod = 0; pod < ev.pods; pod++) for (const id of source.seating[pod]) source.deck(pod, id, db, ev.minDeckSize);
   const runDir = freshRunDir(cfg.outputDir, runId, opts.force);
   // Snapshot config (keys live in env vars, so this is safe to keep) + prompts used; a derived run also records its source.
-  fs.writeFileSync(path.join(runDir, "config.json"), JSON.stringify({ ...cfg, source: opts.source }, null, 2));
+  const provenance = collectProvenance(cfg, engine.name);
+  fs.writeFileSync(path.join(runDir, "config.json"), JSON.stringify({ ...cfg, source: opts.source, provenance }, null, 2));
   fs.cpSync(path.resolve("prompts", ev.promptVersion), path.join(runDir, "prompts"), { recursive: true });
 
   const cube = loadCube(db, ev.cube, cfg.forgeRes);
@@ -70,7 +72,7 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
   const allMatches: MatchResult[] = [];
   info(`run ${runId}: ${seats.length} seats, ${ev.pods} pod(s), ${ev.format}, bo${ev.gamesPerMatch}, engine=${engine.name}, knowledge=${ev.knowledge}`);
   if (source) info(`${source.src.mode} from ${source.src.runDir}: study${source.src.mode === "decks" ? ", draft and deckbuild" : " and draft"} skipped`);
-  recorder.event("run_start", { cube: cube.name, cubeSize: cube.cards.length, seed: ev.seed,
+  recorder.event("run_start", { cube: cube.name, cubeSize: cube.cards.length, seed: ev.seed, provenance,
     seats: cfg.seats.map((s) => ({ id: s.id, provider: s.provider, model: s.model, temperature: s.temperature })), source: opts.source, sourceSeats: source?.seats });
 
   if (ev.cubeStudy && !source) {

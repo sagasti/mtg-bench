@@ -12,6 +12,7 @@ import { type Deck, deckProblems, saveDeck } from "../deckbuild/deckbuild.ts";
 import type { GameEngine, MatchResult } from "../engine/types.ts";
 import { KnowledgeBase } from "../knowledge/tools.ts";
 import { Jsonl, info } from "../util/log.ts";
+import { collectProvenance } from "../util/provenance.ts";
 import { Rng } from "../util/rng.ts";
 import { freshRunDir, pool } from "./run.ts";
 
@@ -44,7 +45,8 @@ export async function runHeadToHead(cfg: BenchConfig, engine: GameEngine, opts: 
     if (problems.length) throw new Error(`deck ${opts.deckFiles[i]} is unusable:\n  ${problems.join("\n  ")}`);
   }
   const runDir = freshRunDir(cfg.outputDir, runId, opts.force);
-  fs.writeFileSync(path.join(runDir, "config.json"), JSON.stringify({ ...cfg, headToHead: opts }, null, 2));
+  const provenance = collectProvenance(cfg, engine.name);
+  fs.writeFileSync(path.join(runDir, "config.json"), JSON.stringify({ ...cfg, headToHead: opts, provenance }, null, 2));
   fs.cpSync(path.resolve("prompts", ev.promptVersion), path.join(runDir, "prompts"), { recursive: true });
 
   const cube = loadCube(db, ev.cube, cfg.forgeRes);
@@ -63,7 +65,7 @@ export async function runHeadToHead(cfg: BenchConfig, engine: GameEngine, opts: 
   const dckFiles = decks.map((d) => saveDeck(deckDir, d)) as [string, string];
   const matchLog = new Jsonl(path.join(runDir, "matches.jsonl"));
   info(`match ${runId}: ${seats[0].id} (${path.basename(opts.deckFiles[0])}) vs ${seats[1].id} (${path.basename(opts.deckFiles[1])}), ${opts.matches} × bo${ev.gamesPerMatch} (${Math.max(1, opts.parallel ?? ev.parallelMatches)} at a time), engine=${engine.name}`);
-  recorder.event("run_start", { headToHead: true, seats: opts.seats, decks: opts.deckFiles });
+  recorder.event("run_start", { headToHead: true, seats: opts.seats, decks: opts.deckFiles, provenance });
 
   const parallel = Math.max(1, opts.parallel ?? ev.parallelMatches);
   const seeds = Array.from({ length: opts.matches }, (_, m) => rng.fork(`h2h-${m + 1}`).int(2 ** 31));

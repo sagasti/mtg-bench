@@ -8,7 +8,7 @@ Every run writes to `runs/<runId>/`:
 | `decisions.jsonl` | **decision** | the same ids, token totals for the decision, `numOptions`, `choice`, `choiceLabels`, `valid`, `invalidAttempts`, `fallback`, `autoResolved`, `modelCalls`, `toolCalls` by name, `latencyMs`, `rationale`, `error` |
 | `draft.jsonl` | draft pick | seat, pack, pick, card taken, full pack contents |
 | `matches.jsonl` | match | seats, per-game winner, on-the-play, turns, end reason, decisions per seat, duration, `delegations` (decisions Forge's AI made for an agent) |
-| `events.jsonl` | run/pod milestone | seating, standings, cube size |
+| `events.jsonl` | run/pod milestone | seating, standings, cube size, seeds; `run_start.provenance`: harness commit (+ uncommitted-changes flag), engine, Forge commit (else jar name), bridge jar SHA-256, `cards.json` and rankings-file SHA-256 (also in `config.json`, and in report.md under "Versions") |
 | `pod<N>/decks/*.dck, *.json` | deck | main deck, sideboard, basics |
 | `prep/<seat>.md` | seat | cube-study brief |
 | `forge-logs/<match>.log` | match | JVM output (Forge engine only) |

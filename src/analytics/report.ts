@@ -12,6 +12,7 @@ import type { MatchResult } from "../engine/types.ts";
 import { rate } from "../rating/bt.ts";
 import { censoredBySeat, outcomesFromMatches, readMatches } from "../rating/outcomes.ts";
 import { readJsonl } from "../util/log.ts";
+import { describeProvenance, type Provenance } from "../util/provenance.ts";
 import type { CallRecord, DecisionRecord } from "./recorder.ts";
 
 interface Agg {
@@ -80,8 +81,10 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
 
   // A run that stopped early has no run_end, and a pod it was playing no pod_end.
   const incomplete: string[] = [];
+  const versions: { run: string; provenance?: Provenance }[] = [];
   for (const d of runDirs) {
     const events = readJsonl(path.join(d, "events.jsonl"));
+    versions.push({ run: path.basename(d), provenance: events.find((e) => e.type === "run_start")?.provenance });
     if (!events.some((e) => e.type === "run_end")) incomplete.push(`${path.basename(d)}: no run_end`);
     const ended = new Set(events.filter((e) => e.type === "pod_end").map((e) => e.pod));
     for (const e of events) if (e.type === "pod_start" && !ended.has(e.pod)) incomplete.push(`${path.basename(d)}: pod ${e.pod} has no pod_end`);
@@ -164,7 +167,7 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
     for (const e of m.engineErrors ?? []) add(engineErrors, `${e.kind} at ${e.at || "?"}`);
   }
 
-  return { incomplete, decisions, calls, matches, bySeat, bySeatPhase, byKind, ratings, censored, games, reasons, delegated, forfeited, provenance, engineErrors, matchesWithEngineErrors, playWinRate: decided.length ? playWins / decided.length : null, pricing };
+  return { incomplete, versions, decisions, calls, matches, bySeat, bySeatPhase, byKind, ratings, censored, games, reasons, delegated, forfeited, provenance, engineErrors, matchesWithEngineErrors, playWinRate: decided.length ? playWins / decided.length : null, pricing };
 }
 
 export function renderReport(s: ReturnType<typeof summarize>, title: string): string {
@@ -300,6 +303,9 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
   L.push(`End reasons: ${Object.entries(s.reasons).map(([r, n]) => `${r} ${n}`).join(", ") || "–"}`);
   const errs = s.matches.filter((m) => m.error);
   if (errs.length) L.push("", `**${errs.length} match(es) failed:** ${errs.slice(0, 5).map((m) => `${m.matchId}: ${m.error}`).join("; ")}`);
+
+  L.push("", "## Versions", "");
+  for (const v of s.versions) L.push(`- ${s.versions.length > 1 ? `${v.run}: ` : ""}${v.provenance ? describeProvenance(v.provenance) : "not recorded (run predates version provenance)"}`);
   return L.join("\n") + "\n";
 }
 
@@ -308,6 +314,7 @@ export function writeReport(runDir: string, cfg?: BenchConfig) {
   fs.writeFileSync(path.join(runDir, "report.md"), renderReport(s, `Run ${path.basename(runDir)}`));
   const json = {
     incomplete: s.incomplete.length ? s.incomplete : undefined,
+    versions: s.versions,
     ratings: s.ratings,
     censored: Object.fromEntries(s.censored),
     seats: Object.fromEntries([...s.bySeat.entries()].map(([id, a]) => [id, { ...a, latencies: undefined, p50LatencyMs: pct(a.latencies, 0.5), p95LatencyMs: pct(a.latencies, 0.95) }])),
