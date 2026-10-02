@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Seat } from "../agents/agent.ts";
-import { type CardDb, getCard, prettyCost } from "../cards/db.ts";
+import { type CardDb, getCard, isBasicLand, prettyCost } from "../cards/db.ts";
 import type { EventConfig } from "../config.ts";
 import type { CardInstance } from "../draft/draft.ts";
 
@@ -34,6 +34,30 @@ export async function buildDeck(seat: Seat, pool: CardInstance[], event: EventCo
   const basics = res.basics ?? {};
   for (const [b, k] of Object.entries(basics)) for (let i = 0; i < k; i++) main.push(b);
   return { seatId: seat.id, main, sideboard: pool.filter((c) => !chosen.has(c.iid)).map((c) => c.name), basics };
+}
+
+/**
+ * Why a deck loaded from disk can't be played as-is: too small, cards the card DB doesn't know (Forge drops those
+ * silently), `basics` that aren't basic lands, or (given the seat's drafted pool) cards it never drafted.
+ */
+export function deckProblems(deck: Deck, db: CardDb, minDeckSize: number, pool?: string[]): string[] {
+  const out: string[] = [];
+  if (deck.main.length < minDeckSize) out.push(`${deck.main.length} main-deck cards, fewer than minDeckSize ${minDeckSize}`);
+  const unknown = [...new Set([...deck.main, ...deck.sideboard].filter((n) => !getCard(db, n)))];
+  if (unknown.length) out.push(`not in the card DB: ${unknown.join(", ")}`);
+  const notBasic = Object.keys(deck.basics ?? {}).filter((b) => !isBasicLand(b));
+  if (notBasic.length) out.push(`listed as basics but not basic lands: ${notBasic.join(", ")}`);
+  if (pool) {
+    const left = new Map<string, number>();
+    for (const n of pool) left.set(n, (left.get(n) ?? 0) + 1);
+    const extra: string[] = [];
+    for (const n of [...deck.main, ...deck.sideboard]) {
+      if (isBasicLand(n)) continue;
+      if (left.get(n)) left.set(n, left.get(n)! - 1); else extra.push(n);
+    }
+    if (extra.length) out.push(`not in the seat's drafted pool: ${extra.join(", ")}`);
+  }
+  return out;
 }
 
 /** Forge .dck format. Deck names are neutral ("Deck") so nothing identifying reaches the engine or agents. */

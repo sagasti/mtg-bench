@@ -27,9 +27,9 @@ One file per ticket. Status: open | in progress | done | dropped.
 | [MB-021](MB-021.md) | Bootstrap clusters collide when merging runs | low | done |
 | [MB-022](MB-022.md) | Card reference omits graveyard, exile and stack-source cards | low | open |
 | [MB-023](MB-023.md) | SeatConfig.concurrency is documented but never read | low | open |
-| [MB-024](MB-024.md) | Re-using a --run-id appends to the existing run and corrupts it | high | open |
-| [MB-025](MB-025.md) | --pools-from accepts an incomplete draft log | medium | open |
-| [MB-026](MB-026.md) | Derived runs don't check the source matches the new config | medium | open |
+| [MB-024](MB-024.md) | Re-using a --run-id appends to the existing run and corrupts it | high | done |
+| [MB-025](MB-025.md) | --pools-from accepts an incomplete draft log | medium | done |
+| [MB-026](MB-026.md) | Derived runs don't check the source matches the new config | medium | done |
 | [MB-027](MB-027.md) | Swiss pairing can dead-end and crash the event; crashed runs report as complete | medium | open |
-| [MB-028](MB-028.md) | --pools-from restores post-deckbuild notes before re-running deckbuild | low | open |
-| [MB-029](MB-029.md) | Loaded decks are never validated | low | open |
+| [MB-028](MB-028.md) | --pools-from restores post-deckbuild notes before re-running deckbuild | low | done |
+| [MB-029](MB-029.md) | Loaded decks are never validated | low | done |

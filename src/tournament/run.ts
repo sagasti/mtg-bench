@@ -30,18 +30,34 @@ export async function pool<T, R>(items: T[], limit: number, fn: (x: T, i: number
   return out;
 }
 
-export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { runId?: string; source?: RunSource } = {}) {
+/**
+ * Create a run dir. Its logs are append-only, so an existing dir is refused rather than mixed into; `force` wipes it first.
+ */
+export function freshRunDir(outputDir: string, runId: string, force = false): string {
+  if (!/^[A-Za-z0-9_.-]+$/.test(runId) || /^\.+$/.test(runId)) throw new Error(`invalid run id "${runId}": use letters, digits, _ . -`);
+  const runDir = path.join(outputDir, runId);
+  if (fs.existsSync(runDir)) {
+    if (!force) throw new Error(`${runDir} already exists; choose another --run-id, or pass --force to delete it and start over`);
+    info(`--force: deleting ${runDir}`);
+    fs.rmSync(runDir, { recursive: true, force: true });
+  }
+  fs.mkdirSync(runDir, { recursive: true });
+  return runDir;
+}
+
+export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { runId?: string; source?: RunSource; force?: boolean } = {}) {
   const ev = cfg.event;
   const runId = opts.runId ?? `${new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19)}_${ev.name.replace(/[^A-Za-z0-9_-]+/g, "_")}`;
-  const runDir = path.join(cfg.outputDir, runId);
   const source = opts.source ? new SourceRun(opts.source, cfg) : null;
-  if (source && path.resolve(source.src.runDir) === path.resolve(runDir)) throw new Error("the new run must not be its own source");
-  fs.mkdirSync(runDir, { recursive: true });
+  if (source && path.resolve(source.src.runDir) === path.resolve(cfg.outputDir, runId)) throw new Error("the new run must not be its own source");
+  const db = loadDb();
+  // Check every saved deck before anything is written.
+  if (source?.src.mode === "decks") for (let pod = 0; pod < ev.pods; pod++) for (const id of source.seating[pod]) source.deck(pod, id, db, ev.minDeckSize);
+  const runDir = freshRunDir(cfg.outputDir, runId, opts.force);
   // Snapshot config (keys live in env vars, so this is safe to keep) + prompts used; a derived run also records its source.
   fs.writeFileSync(path.join(runDir, "config.json"), JSON.stringify({ ...cfg, source: opts.source }, null, 2));
   fs.cpSync(path.resolve("prompts", ev.promptVersion), path.join(runDir, "prompts"), { recursive: true });
 
-  const db = loadDb();
   const cube = loadCube(db, ev.cube, cfg.forgeRes);
   if (cube.missing.length) info(`cube: ${cube.missing.length} card(s) not in DB and dropped: ${cube.missing.slice(0, 5).join(", ")}${cube.missing.length > 5 ? "…" : ""}`);
   const rankings = loadRankings(cfg.forgeRes);
@@ -54,7 +70,7 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
   const allMatches: MatchResult[] = [];
   info(`run ${runId}: ${seats.length} seats, ${ev.pods} pod(s), ${ev.format}, bo${ev.gamesPerMatch}, engine=${engine.name}, knowledge=${ev.knowledge}`);
   if (source) info(`${source.src.mode} from ${source.src.runDir}: study${source.src.mode === "decks" ? ", draft and deckbuild" : " and draft"} skipped`);
-  recorder.event("run_start", { cube: cube.name, cubeSize: cube.cards.length, seats: cfg.seats.map((s) => ({ id: s.id, provider: s.provider, model: s.model })), source: opts.source });
+  recorder.event("run_start", { cube: cube.name, cubeSize: cube.cards.length, seats: cfg.seats.map((s) => ({ id: s.id, provider: s.provider, model: s.model })), source: opts.source, sourceSeats: source?.seats });
 
   if (ev.cubeStudy && !source) {
     info("cube study…");
@@ -75,7 +91,7 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
     let decks: Deck[];
     if (source?.src.mode === "decks") {
       source.restoreContext(order, runDir, pod);
-      decks = order.map((s) => source.deck(pod, s.id));
+      decks = order.map((s) => source.deck(pod, s.id, db, ev.minDeckSize));
       info(`pod ${pod + 1}: decks loaded (${decks.map((d) => d.main.length).join(", ")} cards)`);
     } else {
       let pools: CardInstance[][];
@@ -85,11 +101,11 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
         info(`pod ${pod + 1}: pools loaded (${pools.map((p) => p.length).join(", ")} cards)`);
       } else {
         pools = (await runDraft({ seats: order, cube: cube.cards, event: ev, db, rng: prng.fork("draft"), pod, log: draftLog })).pools;
-        saveNotes(runDir, pod, order);
+        saveNotes(runDir, pod, order, "draft");
         info(`pod ${pod + 1}: draft done`);
       }
       decks = await Promise.all(order.map((s, i) => buildDeck(s, pools[i], ev, db, pod)));
-      saveNotes(runDir, pod, order);
+      saveNotes(runDir, pod, order, "deckbuild");
       info(`pod ${pod + 1}: decks built (${decks.map((d) => d.main.length).join(", ")} cards)`);
     }
     const deckFiles = decks.map((d) => saveDeck(deckDir, d));
