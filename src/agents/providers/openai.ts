@@ -2,7 +2,7 @@
  * OpenAI Chat Completions provider. Also used for any OpenAI-compatible server:
  * OpenRouter, Google Gemini's OpenAI endpoint, xAI, Together, vLLM, Ollama, LM Studio...
  */
-import type { SeatConfig } from "../../config.ts";
+import { maxTokensFor, type SeatConfig } from "../../config.ts";
 import { type CompleteArgs, type ModelTurn, type Provider, ProviderError, postJson } from "./types.ts";
 
 const DEFAULT_BASE: Record<string, string> = {
@@ -26,7 +26,7 @@ export class OpenAIProvider implements Provider {
     if (seat.apiKeyEnv && !this.key) throw new ProviderError(`seat ${seat.id}: env var ${seat.apiKeyEnv} is empty`);
   }
 
-  async complete({ system, messages, tools, signal }: CompleteArgs): Promise<ModelTurn> {
+  async complete({ system, messages, tools, signal, clock, onRetry, maxTokens: cap }: CompleteArgs): Promise<ModelTurn> {
     const msgs: any[] = [{ role: "system", content: system }];
     for (const m of messages) {
       if (m.role === "user") msgs.push({ role: "user", content: m.content });
@@ -47,7 +47,7 @@ export class OpenAIProvider implements Provider {
       tools: tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.input_schema } })),
       tool_choice: "auto",
     };
-    const maxTokens = this.seat.maxTokens ?? 2048;
+    const maxTokens = cap ?? maxTokensFor(this.seat);
     if (this.seat.provider === "openai") body.max_completion_tokens = maxTokens; else body.max_tokens = maxTokens;
     if (this.seat.temperature !== undefined) body.temperature = this.seat.temperature;
     if (this.seat.reasoningEffort) body.reasoning_effort = this.seat.reasoningEffort;
@@ -57,7 +57,7 @@ export class OpenAIProvider implements Provider {
     const { status, json } = await postJson(this.url, body, {
       ...(this.key ? { authorization: `Bearer ${this.key}` } : {}),
       ...(this.seat.headers ?? {}),
-    }, signal);
+    }, { signal, clock, onRetry, bodyError: openAiBodyError });
 
     const choice = json.choices?.[0] ?? {};
     const msg = choice.message ?? {};
@@ -88,4 +88,18 @@ export class OpenAIProvider implements Provider {
       raw,
     };
   }
+}
+
+/**
+ * A 200 that carries no answer is a provider failure, not the model's: `finish_reason: "error"` (e.g. OpenRouter's
+ * Gemini routes), an `error` object, or no content, no tool calls and no output tokens.
+ */
+function openAiBodyError(json: any): string | undefined {
+  if (json.error) return JSON.stringify(json.error).slice(0, 300);
+  const choice = json.choices?.[0];
+  if (!choice) return "no choices";
+  if (choice.finish_reason === "error") return `finish_reason "error"${choice.error ? `: ${JSON.stringify(choice.error).slice(0, 300)}` : ""}`;
+  const msg = choice.message ?? {};
+  if (!msg.content && !msg.tool_calls?.length && !(json.usage?.completion_tokens > 0)) return "empty response (no content, no tool calls, 0 output tokens)";
+  return undefined;
 }

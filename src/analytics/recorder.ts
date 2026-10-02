@@ -32,6 +32,9 @@ export function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
   };
 }
 
+/** Decision phases, plus match notes written between games (not an in-game decision). */
+export type RecordPhase = Phase | "between_games";
+
 export interface CallRecord extends TokenUsage {
   ts: string;
   runId: string;
@@ -39,7 +42,7 @@ export interface CallRecord extends TokenUsage {
   seat: string;
   provider: string;
   model: string;
-  phase: Phase;
+  phase: RecordPhase;
   kind: DecisionKind;
   requestId: string;
   matchId?: string;
@@ -48,9 +51,12 @@ export interface CallRecord extends TokenUsage {
   latencyMs: number;
   stopReason?: string;
   httpStatus?: number;
-  error?: string;
+  error?: string;            // set on every failed provider attempt (HTTP, network, in-body error): the report's "API errors"
   toolCallsRequested: number;
   servedBy?: string;         // upstream host that served the call (OpenRouter routes one model across many)
+  truncated?: boolean;       // stopped by the output cap (length / max_tokens); asked again once with a bigger cap
+  timedOut?: boolean;        // aborted because the decision's time budget ran out
+  specViolation?: string;    // broke the seat's spec: reasoning tokens with reasoning disabled, or an unpinned host
 }
 
 export interface DecisionRecord extends TokenUsage {
@@ -60,11 +66,12 @@ export interface DecisionRecord extends TokenUsage {
   seat: string;
   provider: string;
   model: string;
-  phase: Phase;
+  phase: RecordPhase;
   kind: DecisionKind;
   requestId: string;
   matchId?: string;
   game?: number;
+  attempt?: number;          // the engine re-asked the same step after a failed answer (1 = first re-ask)
   numOptions: number;
   choice: string[];
   choiceLabels: string[];
@@ -77,7 +84,11 @@ export interface DecisionRecord extends TokenUsage {
   toolCalls: Record<string, number>;
   latencyMs: number;
   rationale?: string;
-  error?: string;
+  error?: string;            // why the decision failed (forfeit, fallback, timeout, infrastructure)
+  infraError?: boolean;      // the provider kept failing; the match was abandoned after this row
+  timedOut?: boolean;        // the decision's time budget ran out (a forfeit, or a fallback in deckbuilding)
+  truncated?: number;        // model calls stopped by the output cap
+  specViolation?: string;    // first breach of the seat's reasoning/host spec
 }
 
 export class Recorder {

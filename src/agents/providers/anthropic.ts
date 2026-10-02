@@ -1,5 +1,5 @@
 /** Anthropic Messages API provider (tool use, optional extended thinking, prompt caching). */
-import type { SeatConfig } from "../../config.ts";
+import { maxTokensFor, type SeatConfig } from "../../config.ts";
 import { type CompleteArgs, type ModelTurn, type Provider, ProviderError, postJson } from "./types.ts";
 
 export class AnthropicProvider implements Provider {
@@ -14,7 +14,7 @@ export class AnthropicProvider implements Provider {
     if (!this.key) throw new ProviderError(`seat ${seat.id}: env var ${seat.apiKeyEnv} is empty`);
   }
 
-  async complete({ system, messages, tools, signal }: CompleteArgs): Promise<ModelTurn> {
+  async complete({ system, messages, tools, signal, clock, onRetry, maxTokens: cap }: CompleteArgs): Promise<ModelTurn> {
     const msgs: any[] = [];
     for (const m of messages) {
       if (m.role === "user") msgs.push({ role: "user", content: m.content });
@@ -30,10 +30,10 @@ export class AnthropicProvider implements Provider {
         msgs.push({ role: "user", content: m.results.map((r) => ({ type: "tool_result", tool_use_id: r.id, content: r.content, ...(r.isError ? { is_error: true } : {}) })) });
       }
     }
-    const maxTokens = this.seat.maxTokens ?? 2048;
+    const maxTokens = cap ?? maxTokensFor(this.seat);
     const body: any = {
       model: this.model,
-      max_tokens: this.seat.thinkingBudget ? Math.max(maxTokens, this.seat.thinkingBudget + 1024) : maxTokens,
+      max_tokens: this.seat.thinkingBudget ? Math.max(maxTokens, this.seat.thinkingBudget + 4096) : maxTokens,
       // System prompt is identical for every decision of a phase -> cache it.
       system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
       messages: msgs,
@@ -48,7 +48,8 @@ export class AnthropicProvider implements Provider {
       "x-api-key": this.key,
       "anthropic-version": "2023-06-01",
       ...(this.seat.headers ?? {}),
-    }, signal);
+    }, { signal, clock, onRetry, bodyError: (j) => (j.type === "error" ? JSON.stringify(j.error ?? j).slice(0, 300)
+      : !j.content?.length && !(j.usage?.output_tokens > 0) ? "empty response (no content, 0 output tokens)" : undefined) });
 
     const content: any[] = json.content ?? [];
     const u = json.usage ?? {};

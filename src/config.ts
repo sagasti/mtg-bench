@@ -25,7 +25,7 @@ export interface SeatConfig {
   label?: string;                // display name
   apiKeyEnv?: string;            // env var holding the key (never put keys in the YAML)
   baseUrl?: string;              // override endpoint (OpenAI-compatible servers, proxies)
-  maxTokens?: number;            // max output tokens per model call (default 2048)
+  maxTokens?: number;            // max output tokens per model call, reasoning included (default: see maxTokensFor)
   temperature?: number;
   /** Anthropic extended thinking budget (tokens). Omit to disable. */
   thinkingBudget?: number;
@@ -154,6 +154,22 @@ export function validateConfig(cfg: BenchConfig) {
   if (!["round-robin", "swiss"].includes(cfg.event.format)) errs.push("event.format must be round-robin or swiss");
   if (cfg.engine.type === "forge" && !cfg.engine.forgeDir) errs.push("engine.forgeDir is required when engine.type is forge");
   if (errs.length) throw new Error("Invalid config:\n  - " + errs.join("\n  - "));
+}
+
+/** The seat's config switches reasoning off (OpenRouter's unified `reasoning` field, OpenAI's effort, or Anthropic without thinking). */
+export function reasoningDisabled(s: SeatConfig): boolean {
+  const r = s.extraBody?.reasoning as { enabled?: boolean; max_tokens?: number; effort?: string } | undefined;
+  if (r) return r.enabled === false || r.max_tokens === 0 || r.effort === "none";
+  if (s.reasoningEffort) return s.reasoningEffort === "none";
+  return s.provider === "anthropic" && !s.thinkingBudget;
+}
+
+/**
+ * Output cap per call. Reasoning and the answer share it, so a seat that may reason gets room for both: 4096 tokens
+ * with reasoning off (an answer or a full set of notes fits easily), 16384 otherwise. A seat's maxTokens overrides it.
+ */
+export function maxTokensFor(s: SeatConfig): number {
+  return s.maxTokens ?? (reasoningDisabled(s) ? 4096 : 16384);
 }
 
 /** Checks that every LLM seat's key env var is actually set. Returned as warnings so `check` can list them all. */
