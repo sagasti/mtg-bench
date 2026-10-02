@@ -35,6 +35,10 @@ A match that ends in an error (`error` set in `matches.jsonl`: match timeout, br
 
 A seat with many censored matches is rated on a biased sample even so; fix the cause and re-run rather than reading its rating.
 
+## Seeds and independent replicates
+
+Packs, seating, pairings and match seeds all derive from `event.seed`, each from its own stream (`pod<N>` → `seating`, `draft`, `swiss<R>`, match id), so drawing one never shifts another. Packs are fixed by design: two events with the same cube and seed draft the same packs in the same seats, which suits paired comparisons and replays but makes them one replicate, not two. Give each event of a series its own seed (e.g. base + event index). `pod_start` records `seed` and `draftSeed` (the seed whose packs the pod played; the source's in a `--decks-from` / `--pools-from` run), and `run_start` records each seat's `temperature` when set. `report` and `rate` refuse to pool runs with a pod of the same cube, draft seed and pod index unless given `--allow-same-seed`.
+
 ## report.md sections
 
 A run without `run_end` in `events.jsonl`, or with a pod that has `pod_start` but no `pod_end`, stopped early: the report opens with **INCOMPLETE** and `summary.json` lists the reasons under `incomplete`.
@@ -52,6 +56,7 @@ A run without `run_end` in `events.jsonl`, or with a pod that has `pod_start` bu
 ```bash
 npm run bench -- report runs/<run>                     # rebuild report.md for a run
 npm run bench -- report runs/a runs/b runs/c           # merged report across runs
+npm run bench -- report runs/a runs/b --allow-same-seed  # merge runs that drafted the same packs (not independent)
 npm run bench -- rate runs/a runs/b --level match      # ratings from match wins instead of games
 npm run bench -- rate runs/* --anchor random=1000      # pin a seat's rating
 ```

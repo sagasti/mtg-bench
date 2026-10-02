@@ -35,6 +35,7 @@ export function saveNotes(runDir: string, pod: number, seats: Seat[], stage: Not
 
 export class SourceRun {
   readonly seating: string[][] = []; // by pod
+  readonly draftSeeds: number[] = []; // by pod: the seed whose packs the source played
   /** The source's seats as it played them, recorded in the derived run's run_start. */
   readonly seats: { id: string; provider: string; model?: string }[];
   private picks: { pod: number; seat: string; pack: number; pick: number; card: string }[];
@@ -61,6 +62,7 @@ export class SourceRun {
     // The draft, decks, briefs and notes were made by the source's seats under its event settings: they must match.
     const srcCfg: BenchConfig = JSON.parse(fs.readFileSync(path.join(runDir, "config.json"), "utf8"));
     this.seats = srcCfg.seats.map((s) => ({ id: s.id, provider: s.provider, model: s.model }));
+    for (const e of events) if (e.type === "pod_start") this.draftSeeds[e.pod] = e.draftSeed ?? srcCfg.event.seed;
     const changes: string[] = [];
     for (const k of ["cube", "packs", "packSize", "cubeStudy"] as const) {
       if (srcCfg.event[k] !== cfg.event[k]) changes.push(`event.${k}: source ${JSON.stringify(srcCfg.event[k])}, config ${JSON.stringify(cfg.event[k])}`);

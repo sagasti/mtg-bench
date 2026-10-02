@@ -7,12 +7,12 @@
  *   run <config.yaml> [--engine mock|forge] [--pods N] [--run-id ID] [--force] [--forge-res DIR]
  *       [--decks-from RUNDIR | --pools-from RUNDIR] [--allow-seat-changes]   replay a saved run's seating + decks (matches only) or drafted pools (deckbuild + matches)
  *   match <config.yaml> --seats A,B --decks a.dck,b.dck [--matches N] [--parallel N] [--run-id ID] [--force]   head-to-head with fixed decks, no draft
- *   report <runDir...>                    (re)build report.md for one run, or a merged report for several
- *   rate <runDir...> [--level game|match] [--anchor seat=1500]
+ *   report <runDir...> [--allow-same-seed]   (re)build report.md for one run, or a merged report for several
+ *   rate <runDir...> [--level game|match] [--anchor seat=1500] [--allow-same-seed]
  */
 import fs from "node:fs";
 import path from "node:path";
-import { summarize, renderReport } from "./analytics/report.ts";
+import { renderReport, sharedDrafts, summarize } from "./analytics/report.ts";
 import { AnthropicProvider } from "./agents/providers/anthropic.ts";
 import { OpenAIProvider } from "./agents/providers/openai.ts";
 import { buildIndex, loadDb, saveIndex } from "./cards/db.ts";
@@ -36,6 +36,14 @@ function flag(args: string[], name: string): string | undefined {
 }
 const BOOL_FLAGS = ["--ping", "--verbose", "--force", "--allow-seat-changes", "--allow-same-seed"];
 const positional = (args: string[]) => args.filter((a, i) => !a.startsWith("--") && !(i > 0 && args[i - 1].startsWith("--") && !BOOL_FLAGS.includes(args[i - 1])));
+
+/** report / rate pool runs as independent replicates: refuse runs that drafted the same packs unless --allow-same-seed. */
+function checkIndependent(dirs: string[], args: string[]) {
+  const shared = sharedDrafts(dirs);
+  if (!shared.length || args.includes("--allow-same-seed")) return;
+  throw new Error(`these runs drafted the same packs, so they aren't independent replicates:\n  ${shared.join("\n  ")}\n`
+    + "give each event its own seed, or pass --allow-same-seed to pool them anyway");
+}
 
 async function main() {
   const [cmd, ...args] = process.argv.slice(2);
@@ -150,6 +158,7 @@ async function main() {
     }
     case "report": {
       const dirs = positional(args);
+      checkIndependent(dirs, args);
       const s = summarize(dirs);
       const md = renderReport(s, dirs.length === 1 ? `Run ${path.basename(dirs[0])}` : `Merged report (${dirs.length} runs)`);
       if (dirs.length === 1) fs.writeFileSync(path.join(dirs[0], "report.md"), md);
@@ -158,6 +167,7 @@ async function main() {
     }
     case "rate": {
       const dirs = positional(args);
+      checkIndependent(dirs, args);
       const level = (flag(args, "level") ?? "game") as "game" | "match";
       const anchorArg = flag(args, "anchor");
       const anchor = anchorArg ? { id: anchorArg.split("=")[0], rating: Number(anchorArg.split("=")[1] ?? 1500) } : undefined;

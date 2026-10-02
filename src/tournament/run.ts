@@ -70,7 +70,8 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
   const allMatches: MatchResult[] = [];
   info(`run ${runId}: ${seats.length} seats, ${ev.pods} pod(s), ${ev.format}, bo${ev.gamesPerMatch}, engine=${engine.name}, knowledge=${ev.knowledge}`);
   if (source) info(`${source.src.mode} from ${source.src.runDir}: study${source.src.mode === "decks" ? ", draft and deckbuild" : " and draft"} skipped`);
-  recorder.event("run_start", { cube: cube.name, cubeSize: cube.cards.length, seats: cfg.seats.map((s) => ({ id: s.id, provider: s.provider, model: s.model })), source: opts.source, sourceSeats: source?.seats });
+  recorder.event("run_start", { cube: cube.name, cubeSize: cube.cards.length, seed: ev.seed,
+    seats: cfg.seats.map((s) => ({ id: s.id, provider: s.provider, model: s.model, temperature: s.temperature })), source: opts.source, sourceSeats: source?.seats });
 
   if (ev.cubeStudy && !source) {
     info("cube study…");
@@ -83,9 +84,12 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
 
   for (let pod = 0; pod < ev.pods; pod++) {
     const prng = rng.fork(`pod${pod}`);
-    const order: Seat[] = source ? source.seating[pod].map((id) => seats.find((s) => s.id === id)!) : ev.rotateSeats ? prng.shuffle([...seats]) : [...seats];
+    // Seating has its own stream so that drawing it leaves every other pod stream (draft, pairings, match seeds) as it was:
+    // a re-run with the source's seating then gets the same match seeds as the source.
+    const order: Seat[] = source ? source.seating[pod].map((id) => seats.find((s) => s.id === id)!) : ev.rotateSeats ? prng.fork("seating").shuffle([...seats]) : [...seats];
     info(`pod ${pod + 1}/${ev.pods}: seating ${order.map((s) => s.id).join(" → ")}`);
-    recorder.event("pod_start", { pod, seating: order.map((s) => s.id) });
+    // draftSeed: the seed whose packs this pod plays (the source's in a derived run); same cube + draftSeed + pod = same packs.
+    recorder.event("pod_start", { pod, seating: order.map((s) => s.id), seed: ev.seed, draftSeed: source ? source.draftSeeds[pod] : ev.seed });
 
     const deckDir = path.join(runDir, `pod${pod}`, "decks");
     let decks: Deck[];

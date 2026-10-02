@@ -49,6 +49,25 @@ const usd = (n: number | null) => (n === null ? "n/a" : `$${n.toFixed(n < 1 ? 4 
 /** Provider-reported cost, marked when only some calls reported one. */
 const reported = (a: Agg) => (a.costReportedCalls === 0 ? "n/a" : `${usd(a.reportedCost)}${a.costReportedCalls < a.modelCalls ? ` (${a.costReportedCalls}/${a.modelCalls} calls)` : ""}`);
 
+/**
+ * Pods of different runs that drafted the same packs (same cube, draft seed and pod index): they aren't independent
+ * replicates, so pooling them overstates the evidence. Returns one line per shared pod; empty when all are distinct.
+ */
+export function sharedDrafts(runDirs: string[]): string[] {
+  const seen = new Map<string, string[]>();
+  for (const d of runDirs) {
+    const events = readJsonl(path.join(d, "events.jsonl"));
+    const f = path.join(d, "config.json");
+    const cfg = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : undefined;
+    const cube = events.find((e) => e.type === "run_start")?.cube ?? cfg?.event?.cube;
+    for (const e of events) if (e.type === "pod_start") {
+      const key = `cube "${cube}", seed ${e.draftSeed ?? cfg?.event?.seed}, pod ${e.pod}`;
+      seen.set(key, [...(seen.get(key) ?? []), path.basename(d)]);
+    }
+  }
+  return [...seen.entries()].filter(([, runs]) => runs.length > 1).map(([key, runs]) => `${key}: ${runs.join(", ")}`);
+}
+
 export function summarize(runDirs: string[], cfg?: BenchConfig) {
   const decisions: DecisionRecord[] = runDirs.flatMap((d) => readJsonl(path.join(d, "decisions.jsonl")));
   const calls: CallRecord[] = runDirs.flatMap((d) => readJsonl(path.join(d, "usage.jsonl")));
