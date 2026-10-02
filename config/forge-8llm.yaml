@@ -37,7 +37,7 @@ engine:
   # bridgeJar: bridge/build/mtg-bench-bridge.jar                          # default
   java: /home/linuxbrew/.linuxbrew/opt/openjdk@17/bin/java
   javaOpts: ["-Xmx3g"]
-  gameTimeoutSec: 3600            # wall-clock budget per game; the match cap is gamesPerMatch × this (matchTimeoutSec overrides)
+  gameTimeoutSec: 7200            # wall-clock budget per game; the match cap is gamesPerMatch × this (matchTimeoutSec overrides)
 
 outputDir: runs
 
@@ -65,18 +65,21 @@ seats:
     provider: openrouter
     model: deepseek/deepseek-v4-flash
     apiKeyEnv: OPENROUTER_API_KEY
+    maxSpendUsd: 5                 # safety cap: an over-budget seat stops; the run continues
     maxTokens: 4096
     extraBody: { reasoning: { enabled: false }, provider: { order: [baidu], allow_fallbacks: false } }   # Baidu 1730/1730 calls
   - id: qwen-flash
     provider: openrouter
     model: qwen/qwen3.7-flash
     apiKeyEnv: OPENROUTER_API_KEY
+    maxSpendUsd: 5                 # safety cap: an over-budget seat stops; the run continues
     maxTokens: 4096
     extraBody: { reasoning: { enabled: false }, provider: { order: [alibaba], allow_fallbacks: false } }   # Alibaba 125/125
   - id: gpt-oss-120b
     provider: openrouter
     model: openai/gpt-oss-120b
     apiKeyEnv: OPENROUTER_API_KEY
+    maxSpendUsd: 5                 # safety cap: an over-budget seat stops; the run continues
     maxTokens: 16384
     # This endpoint refuses to disable reasoning; lowest effort instead. AkashML 98/108 (DeepInfra 8, Mancer 2).
     extraBody: { reasoning: { effort: low }, provider: { order: [akashml], allow_fallbacks: false } }
@@ -84,6 +87,7 @@ seats:
     provider: openrouter
     model: openai/gpt-5-nano
     apiKeyEnv: OPENROUTER_API_KEY
+    maxSpendUsd: 5                 # safety cap: an over-budget seat stops; the run continues
     maxTokens: 16384
     # This endpoint refuses to disable reasoning; lowest effort instead. OpenAI 67/67.
     extraBody: { reasoning: { effort: low }, provider: { order: [openai], allow_fallbacks: false } }
@@ -91,6 +95,7 @@ seats:
     provider: openrouter
     model: google/gemini-2.5-flash-lite
     apiKeyEnv: OPENROUTER_API_KEY
+    maxSpendUsd: 5                 # safety cap: an over-budget seat stops; the run continues
     maxTokens: 4096
     # `enabled: false` was ignored (256k reasoning tokens in the sanity game). max_tokens maps to Gemini's thinkingBudget,
     # and a budget of 0 turns thinking off on 2.5 Flash / Flash-Lite. Probed 2026-10-02: Google Vertex ignores every
@@ -100,12 +105,14 @@ seats:
     provider: openrouter
     model: openai/gpt-6-luna
     apiKeyEnv: OPENROUTER_API_KEY
+    maxSpendUsd: 5                 # safety cap: an over-budget seat stops; the run continues
     maxTokens: 4096
     extraBody: { reasoning: { enabled: false }, provider: { order: [openai], allow_fallbacks: false } }   # OpenAI 68/68
   - id: glm-flash
     provider: openrouter
     model: z-ai/glm-5.3-flash
     apiKeyEnv: OPENROUTER_API_KEY
+    maxSpendUsd: 5                 # safety cap: an over-budget seat stops; the run continues
     maxTokens: 16384
     # This endpoint refuses to disable reasoning; lowest effort instead. Relace 34/80 (Together 18, StreamLake 17, 4 others).
     extraBody: { reasoning: { effort: low }, provider: { order: [relace], allow_fallbacks: false } }
@@ -113,5 +120,6 @@ seats:
     provider: openrouter
     model: mistralai/mistral-small-2603
     apiKeyEnv: OPENROUTER_API_KEY
+    maxSpendUsd: 5                 # safety cap: an over-budget seat stops; the run continues
     maxTokens: 4096
     extraBody: { reasoning: { enabled: false }, provider: { order: [mistral], allow_fallbacks: false } }   # Mistral 176/176
