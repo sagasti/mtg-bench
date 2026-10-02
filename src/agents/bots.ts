@@ -14,6 +14,29 @@ import type { AgentResult, DecisionAgent } from "./agent.ts";
 
 export interface Bot { choose(req: DecisionRequest): DecisionResponse }
 
+/**
+ * Anchor versions. Bump a bot's when its policy below changes or when the tags it reads change (option `meta` and
+ * request `hints`, produced by the bridge's botTags / PlayerControllerExternal): its ratings then measure a different
+ * player, and `report` / `rate` refuse to pool runs whose anchors differ (MB-002).
+ */
+export const BOT_VERSIONS: Record<string, string> = { random: "v1", "rank-bot": "v2", "forge-ai": "v1" };
+
+/**
+ * The anchor a bot seat plays as, e.g. "rank-bot@human-v2": provider, the path that feeds it tags (mock engine, or the
+ * Forge controller: human / ai) and the policy version. Undefined for LLM seats.
+ */
+export function anchorVersion(provider: string, engine: string, controller?: string): string | undefined {
+  const v = BOT_VERSIONS[provider];
+  return v && `${provider}@${engine === "mock" ? "mock" : controller ?? "human"}-${v}`;
+}
+
+/** Each bot seat's anchor version, for run_start. */
+export function anchorVersions(seats: { id: string; provider: string }[], engine: string, controller?: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const s of seats) { const v = anchorVersion(s.provider, engine, controller); if (v) out[s.id] = v; }
+  return out;
+}
+
 const BASIC_FOR: Record<string, string> = { W: "Plains", U: "Island", B: "Swamp", R: "Mountain", G: "Forest" };
 
 export class RandomBot implements Bot {

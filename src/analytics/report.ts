@@ -6,6 +6,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { BOT_VERSIONS } from "../agents/bots.ts";
 import type { BenchConfig, Pricing } from "../config.ts";
 import { scanEngineErrors } from "../engine/forge/log.ts";
 import type { MatchResult } from "../engine/types.ts";
@@ -87,6 +88,35 @@ export function sharedDrafts(runDirs: string[]): string[] {
   return [...seen.entries()].filter(([, runs]) => runs.length > 1).map(([key, runs]) => `${key}: ${runs.join(", ")}`);
 }
 
+/**
+ * Bot anchors whose version differs between runs, and runs on different cubes: a bot's rating depends on both
+ * (MB-002), so pooling them mixes two rating scales. One line per difference; empty when the runs agree. Runs from
+ * before anchors were recorded count as "unrecorded".
+ */
+export function anchorDifferences(runDirs: string[]): string[] {
+  const versions = new Map<string, Map<string, string[]>>(); // provider -> version -> runs
+  const cubes = new Map<string, string[]>();
+  const note = <K>(m: Map<K, string[]>, k: K, run: string) => { if (!m.get(k)?.includes(run)) m.set(k, [...(m.get(k) ?? []), run]); };
+  for (const d of runDirs) {
+    const run = path.basename(d);
+    const start = readJsonl(path.join(d, "events.jsonl")).find((e) => e.type === "run_start");
+    const f = path.join(d, "config.json");
+    const cfg = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : undefined;
+    note(cubes, start?.cube ?? cfg?.event?.cube ?? "unknown", run);
+    const anchors: Record<string, string> = start?.anchors ?? {};
+    for (const s of (cfg?.seats ?? []) as { id: string; provider: string }[]) {
+      if (!BOT_VERSIONS[s.provider]) continue;
+      if (start?.headToHead && !start.seats?.includes(s.id)) continue;
+      if (!versions.has(s.provider)) versions.set(s.provider, new Map());
+      note(versions.get(s.provider)!, anchors[s.id] ?? `${s.provider}@unrecorded`, run);
+    }
+  }
+  const list = (m: Map<string, string[]>) => [...m.entries()].map(([v, runs]) => `${v} (${runs.join(", ")})`).join("; ");
+  const out = [...versions.entries()].filter(([, m]) => m.size > 1).map(([p, m]) => `${p}: ${list(m)}`);
+  if (cubes.size > 1) out.push(`cube: ${list(cubes)}`);
+  return out;
+}
+
 export function summarize(runDirs: string[], cfg?: BenchConfig) {
   const decisions: DecisionRow[] = runDirs.flatMap((d) => readJsonl(path.join(d, "decisions.jsonl")));
   const calls: CallRow[] = runDirs.flatMap((d) => readJsonl(path.join(d, "usage.jsonl")));
@@ -99,10 +129,11 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
 
   // A run that stopped early has no run_end, and a pod it was playing no pod_end.
   const incomplete: string[] = [];
-  const versions: { run: string; provenance?: Provenance }[] = [];
+  const versions: { run: string; provenance?: Provenance; anchors?: Record<string, string> }[] = [];
   for (const d of runDirs) {
     const events = readJsonl(path.join(d, "events.jsonl"));
-    versions.push({ run: path.basename(d), provenance: events.find((e) => e.type === "run_start")?.provenance });
+    const start = events.find((e) => e.type === "run_start");
+    versions.push({ run: path.basename(d), provenance: start?.provenance, anchors: start?.anchors });
     if (!events.some((e) => e.type === "run_end")) incomplete.push(`${path.basename(d)}: no run_end`);
     const ended = new Set(events.filter((e) => e.type === "pod_end").map((e) => e.pod));
     for (const e of events) if (e.type === "pod_start" && !ended.has(e.pod)) incomplete.push(`${path.basename(d)}: pod ${e.pod} has no pod_end`);
@@ -367,7 +398,10 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
   if (errs.length) L.push("", `**${errs.length} match(es) failed:** ${errs.slice(0, 5).map((m) => `${m.matchId}: ${m.error}`).join("; ")}`);
 
   L.push("", "## Versions", "");
-  for (const v of s.versions) L.push(`- ${s.versions.length > 1 ? `${v.run}: ` : ""}${v.provenance ? describeProvenance(v.provenance) : "not recorded (run predates version provenance)"}`);
+  for (const v of s.versions) {
+    const anchors = [...new Set(Object.values(v.anchors ?? {}))].sort().join(", ");
+    L.push(`- ${s.versions.length > 1 ? `${v.run}: ` : ""}${v.provenance ? describeProvenance(v.provenance) : "not recorded (run predates version provenance)"}${anchors ? ` · anchors ${anchors}` : ""}`);
+  }
   return L.join("\n") + "\n";
 }
 

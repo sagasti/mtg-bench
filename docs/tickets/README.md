@@ -5,7 +5,7 @@ One file per ticket. Status: open | in progress | done | dropped.
 | Code | Title | Severity | Status |
 |---|---|---|---|
 | [MB-001](MB-001.md) | Pods, not games, are the replication unit; one pod can't separate models | high | in progress |
-| [MB-002](MB-002.md) | Rating anchors drift with bridge version and cube; rank-bot forfeits targeting at scale | high | in progress |
+| [MB-002](MB-002.md) | Rating anchors drift with bridge version and cube; rank-bot forfeits targeting at scale | high | done |
 | [MB-003](MB-003.md) | Provider errors and truncated outputs are scored as the agent's mistakes | high | done |
 | [MB-004](MB-004.md) | Seats aren't in the same reasoning regime or on pinned hosts | high | in progress |
 | [MB-005](MB-005.md) | The prompt misdescribes the interface; harness policies shape which decisions exist | medium | in progress |

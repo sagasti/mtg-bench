@@ -50,6 +50,12 @@ A game that reaches `maxGameTurns` ends as a draw ("Draw (turn cap of N turns)" 
 
 Packs, seating, pairings and match seeds all derive from `event.seed`, each from its own stream (`pod<N>` → `seating`, `draft`, `swiss<R>`, match id), so drawing one never shifts another. Packs are fixed by design: two events with the same cube and seed draft the same packs in the same seats, which suits paired comparisons and replays but makes them one replicate, not two. Give each event of a series its own seed (e.g. base + event index). `pod_start` records `seed` and `draftSeed` (the seed whose packs the pod played; the source's in a `--decks-from` / `--pools-from` run), and `run_start` records each seat's `temperature` when set. `report` and `rate` refuse to pool runs with a pod of the same cube, draft seed and pod index unless given `--allow-same-seed`.
 
+## Anchor versions
+
+The bots only pin the rating scale while they play the same way. A bot's play depends on its policy (`src/agents/bots.ts`) and on the tags the bridge computes for it (option `meta`, request `hints`), and its drafting on the cube (unranked cards score a flat 0.3). So each bot seat's anchor version is recorded in `run_start.anchors`, e.g. `rank-bot@human-v2`: provider, the path that feeds it tags (`mock`, or the Forge controller `human` / `ai`) and the policy version in `BOT_VERSIONS` (bots.ts). **Bump a bot's version whenever bots.ts changes its policy or the bridge changes the tags it reads** (`InputDriver.botTags`, the attack/block hints, `PlayerControllerExternal`). report.md lists the anchors under "Versions".
+
+`report` and `rate` refuse to pool runs whose anchors differ (a bot provider with two versions, counting runs from before anchors were recorded as `unrecorded`) or that were played on different cubes, unless given `--allow-anchor-changes`. forge-ai's play is Forge's own AI, so a Forge bump changes it too: run the conformance check (`bench conformance`) and bump `forge-ai` when it reports a change.
+
 ## report.md sections
 
 A run without `run_end` in `events.jsonl`, or with a pod that has `pod_start` but no `pod_end`, stopped early: the report opens with **INCOMPLETE** and `summary.json` lists the reasons under `incomplete`.
@@ -68,6 +74,7 @@ A run without `run_end` in `events.jsonl`, or with a pod that has `pod_start` bu
 npm run bench -- report runs/<run>                     # rebuild report.md for a run
 npm run bench -- report runs/a runs/b runs/c           # merged report across runs
 npm run bench -- report runs/a runs/b --allow-same-seed  # merge runs that drafted the same packs (not independent)
+npm run bench -- report runs/a runs/b --allow-anchor-changes  # merge runs whose bot anchors or cube differ (not one scale)
 npm run bench -- rate runs/a runs/b --level match      # ratings from match wins instead of games
 npm run bench -- rate runs/* --anchor random=1000      # pin a seat's rating
 ```

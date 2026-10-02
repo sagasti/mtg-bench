@@ -54,7 +54,7 @@ Every LLM must support **tool/function calling**. Answers are submitted through 
 
 ## Recommended line-ups
 
-- **Comparing 5 LLMs:** 5 LLM seats plus `forge-ai`, `rank-bot` and `random` as anchors. The anchors cost nothing and pin the rating scale, so numbers from different runs and benchmark versions stay comparable.
+- **Comparing 5 LLMs:** 5 LLM seats plus `forge-ai`, `rank-bot` and `random` as anchors. The anchors cost nothing and pin the rating scale across runs, but only while the anchors themselves don't change: each bot seat records an anchor version (`rank-bot@human-v2`; docs/ANALYTICS.md "Anchor versions"), and runs with different anchor versions or cubes aren't pooled.
 - **Comparing 8 LLMs:** allowed, but keep at least one anchor in some pods (e.g. alternate line-ups across runs) so ratings stay anchored.
 - **Ablations:** the same model can take several seats with different settings, e.g. `opus-think` (with `thinkingBudget`) vs `opus-nothink`. Seat ids must differ. Cube study and knowledge level are per-event settings, not per-seat, so run those comparisons as separate events.
 

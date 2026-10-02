@@ -168,6 +168,7 @@ config/                       smoke.mock.yaml, forge-bots.yaml, forge-1llm.yaml,
 ## 6. Decisions log (owner decisions, newest first)
 
 ### 2026-10-02
+- **Anchors are versioned and never pooled across versions or cubes** (MB-002). Each bot seat records `run_start.anchors` (`rank-bot@human-v2`: provider, tag path `mock` / `human` / `ai`, policy version from `BOT_VERSIONS` in bots.ts). Bump the version when bots.ts's policy or the bridge's bot tags change. `report` / `rate` refuse runs whose anchors or cube differ (older runs count as `unrecorded`) unless `--allow-anchor-changes`. Current: random v1, rank-bot v2 (this week's targeting/delve/sorcery-speed changes), forge-ai v1.
 - **Pods are the replication unit** (MB-001). With more than one pod the headline bootstrap resamples pods, then matches within each drawn pod; report.md adds "Ratings by pod" (each pod fitted alone) and each seat's SD between pods, the noise floor for identical bots. A one-pod CI leaves out pod-to-pod variation and says so. Policy in `docs/ANALYTICS.md`.
 - **Turn-cap draws count half a win to each seat** (MB-007): BT scores a drawn game 0.5 (a drawn match 0.5 at match level), as before; draws are kept because letting games stall is part of a seat's play. report.md lists turn-cap draws per seat.
 - **Provider failures are infrastructure, never the agent's answer** (MB-003). HTTP 200 bodies with `finish_reason: "error"`, an `error` object, or no content, no tool calls and no output tokens are retried by the provider layer like a 5xx; each failed attempt is a `usage.jsonl` row with `error` (the report's "API errors"); a persistent failure abandons the match. Found in `sanity-gemini-flash-lite`: 78 such calls had been nudged as bad answers and ended as forfeits.
@@ -200,6 +201,8 @@ config/                       smoke.mock.yaml, forge-bots.yaml, forge-1llm.yaml,
 - **Iterate gameplay with `bench match`** (fixed decks, no draft) on a cheap model: DeepSeek V4 Flash via OpenRouter, reasoning off, host pinned to one fp8 provider (Baidu). The report's reported-cost column is OpenRouter's actual charge.
 
 ## 7. Future work
+
+- **An anchor independent of harness tags** (MB-002). rank-bot reads tags the bridge computes, so its strength moves with the bridge (hence anchor versions). A steadier anchor: Forge's own drafting (`BoosterDraftAI`) plus Forge's AI in play, or fixed published decks piloted by Forge's AI.
 
 - **Competitive-REL information tier** (decided 2026-10-01 to defer as over-complicated for now). At Competitive REL, derived information (current characteristics, zone counts, Oracle text) is something a player is entitled to but must work out or look up. A `competitive` option would show only status and free information in the prompt (names, counters, tapped/attached/zone, life, phase, score) and make derived information available through tools (`inspect(card)` for a permanent's current characteristics, zone counts, `lookup_card`), testing whether a model checks before acting. Sources: MTR 4.1 (https://blogs.magicjudges.org/rules/mtr4-1/).
 - **Remove the AI-controller bridge** (`PlayerControllerExternal`, `AgentCostDecision`, `engine.controller: ai`) once a few more human-path events have run; then drop the "both bridges" columns from `docs/DECISION-PROVENANCE.md`.

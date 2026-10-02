@@ -4,6 +4,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { anchorVersions } from "../agents/bots.ts";
 import { makeSeat } from "../agents/factory.ts";
 import { promptFile } from "../agents/render.ts";
 import type { Seat } from "../agents/agent.ts";
@@ -74,6 +75,7 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
   info(`run ${runId}: ${seats.length} seats, ${ev.pods} pod(s), ${ev.format}, bo${ev.gamesPerMatch}, engine=${engine.name}, knowledge=${ev.knowledge}`);
   if (source) info(`${source.src.mode} from ${source.src.runDir}: study${source.src.mode === "decks" ? ", draft and deckbuild" : " and draft"} skipped`);
   recorder.event("run_start", { cube: cube.name, cubeSize: cube.cards.length, seed: ev.seed, provenance,
+    anchors: anchorVersions(cfg.seats, engine.name, cfg.engine.controller),
     seats: cfg.seats.map((s) => ({ id: s.id, provider: s.provider, model: s.model, temperature: s.temperature })), source: opts.source, sourceSeats: source?.seats });
 
   if (ev.cubeStudy && !source) {

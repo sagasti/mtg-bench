@@ -1,6 +1,7 @@
 /** Head-to-head: two seats play N matches with fixed decks. No study, draft or deckbuilding, so gameplay can be iterated on alone. */
 import fs from "node:fs";
 import path from "node:path";
+import { anchorVersions } from "../agents/bots.ts";
 import { makeSeat } from "../agents/factory.ts";
 import { promptFile } from "../agents/render.ts";
 import type { Seat } from "../agents/agent.ts";
@@ -66,7 +67,8 @@ export async function runHeadToHead(cfg: BenchConfig, engine: GameEngine, opts: 
   const dckFiles = decks.map((d) => saveDeck(deckDir, d)) as [string, string];
   const matchLog = new Jsonl(path.join(runDir, "matches.jsonl"));
   info(`match ${runId}: ${seats[0].id} (${path.basename(opts.deckFiles[0])}) vs ${seats[1].id} (${path.basename(opts.deckFiles[1])}), ${opts.matches} × bo${ev.gamesPerMatch} (${Math.max(1, opts.parallel ?? ev.parallelMatches)} at a time), engine=${engine.name}`);
-  recorder.event("run_start", { headToHead: true, seats: opts.seats, decks: opts.deckFiles, provenance });
+  recorder.event("run_start", { headToHead: true, seats: opts.seats, decks: opts.deckFiles, provenance, cube: cube.name,
+    anchors: anchorVersions(seats.map((s) => s.config), engine.name, cfg.engine.controller) });
 
   const parallel = Math.max(1, opts.parallel ?? ev.parallelMatches);
   const seeds = Array.from({ length: opts.matches }, (_, m) => rng.fork(`h2h-${m + 1}`).int(2 ** 31));
