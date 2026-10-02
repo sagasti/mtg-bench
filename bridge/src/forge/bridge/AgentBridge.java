@@ -46,6 +46,7 @@ public final class AgentBridge {
         for (int i = 0; i + 1 < args.length; i += 2) a.put(args[i].replaceFirst("^--", ""), args[i + 1]);
 
         BridgeClient client = new BridgeClient(Integer.parseInt(a.get("port")), a.get("token"));
+        StateView.warnings = client;
         int exit = 0;
         try {
             GuiBase.setInterface(new GuiDesktop());
@@ -85,6 +86,8 @@ public final class AgentBridge {
                 game.setNoGUIUser();
                 TurnCap cap = new TurnCap(game, ctx.maxTurns);
                 game.subscribeToEvents(cap);
+                LoopGuard loop = new LoopGuard(game, ctx);
+                game.subscribeToEvents(loop);
                 JsonObject start = new JsonObject();
                 start.addProperty("type", "game_start");
                 start.addProperty("game", g);
@@ -108,7 +111,7 @@ public final class AgentBridge {
                 if (starter != null) end.addProperty("onThePlay", starter.getLobbyPlayer().equals(lobby[0]) ? 0 : 1);
                 end.addProperty("turns", out != null ? out.getLastTurnNumber() : game.getPhaseHandler().getTurn());
                 end.addProperty("reason", error != null ? "error: " + error : cap.reached ? "Draw (turn cap of " + ctx.maxTurns + " turns)"
-                        : out != null ? String.valueOf(out.getWinCondition()) : "unknown");
+                        : loop.reached ? "Draw (unbreakable loop)" : out != null ? String.valueOf(out.getWinCondition()) : "unknown");
                 // Full Forge game log, chronological, for offline review. The harness writes it to a file; it never reaches agents.
                 JsonArray log = new JsonArray();
                 for (GameLogEntry e : game.getGameLog().getAllEntries()) log.add(e.type() + ": " + e.message());
@@ -174,6 +177,66 @@ public final class AgentBridge {
                 for (Player p : game.getPlayers()) p.intentionalDraw();
                 game.setGameOver(GameEndReason.Draw);
             }
+        }
+    }
+
+    /**
+     * An unbreakable loop is a draw (in the spirit of MTR 4.4): the same game state at priority, with something on the
+     * stack, recurring LOOP_REPEATS times in one turn. Nothing in a loop like that changes anything, so neither player
+     * is going to stop it (both copying Chain of Smog back and forth with empty hands, for every kind of seat). The
+     * state compared is public: turn, phase, who has priority, each player's life, poison, zone sizes and floating
+     * mana, every permanent (tapped, counters, damage, power/toughness) and the stack (sources, abilities, targets).
+     */
+    static final class LoopGuard {
+        static final int LOOP_REPEATS = 20;
+        private final Game game;
+        private final MatchContext ctx;
+        private final Map<String, Integer> seen = new HashMap<>();
+        private int turn = -1;
+        volatile boolean reached = false;
+
+        LoopGuard(Game game, MatchContext ctx) {
+            this.game = game;
+            this.ctx = ctx;
+        }
+
+        @Subscribe
+        public void onPriority(GameEventPlayerPriority e) {
+            if (game.isGameOver() || game.getStack().isEmpty()) return;
+            int t = game.getPhaseHandler().getTurn();
+            if (t != turn) { seen.clear(); turn = t; }
+            if (seen.merge(stateKey(e), 1, Integer::sum) < LOOP_REPEATS) return;
+            reached = true;
+            for (int i = 0; i < 2; i++)
+                ctx.auto(i, "policy", "game_end", "unbreakable loop: the same game state recurred " + LOOP_REPEATS + " times in one turn; game drawn");
+            for (Player p : game.getPlayers()) p.intentionalDraw();
+            game.setGameOver(GameEndReason.Draw);
+        }
+
+        private String stateKey(GameEventPlayerPriority e) {
+            StringBuilder sb = new StringBuilder();
+            sb.append(e.phase()).append('|').append(e.priority() != null ? e.priority().getId() : -1);
+            for (Player p : game.getPlayers()) {
+                sb.append("|p").append(p.getId()).append(':').append(p.getLife()).append(',').append(p.getPoisonCounters());
+                for (forge.game.zone.ZoneType z : new forge.game.zone.ZoneType[] { forge.game.zone.ZoneType.Hand, forge.game.zone.ZoneType.Library,
+                        forge.game.zone.ZoneType.Graveyard, forge.game.zone.ZoneType.Exile }) sb.append(',').append(p.getCardsIn(z).size());
+                sb.append(',').append(p.getManaPool().totalMana());
+            }
+            for (forge.game.card.Card c : game.getCardsIn(forge.game.zone.ZoneType.Battlefield)) {
+                sb.append("|c").append(c.getId()).append(c.isTapped() ? 'T' : 'U').append(c.getCounters()).append(',').append(c.getDamage());
+                if (c.isCreature()) sb.append(',').append(c.getNetPower()).append('/').append(c.getNetToughness());
+            }
+            // Stack objects by source name, not id: each copy of a spell is a new card.
+            for (forge.game.spellability.SpellAbilityStackInstance si : game.getStack()) {
+                forge.game.spellability.SpellAbility sa = si.getSpellAbility();
+                sb.append("|s").append(sa.getHostCard() != null ? sa.getHostCard().getName() : "?").append(',').append(sa.getApi());
+                for (forge.game.spellability.TargetChoices tc : sa.getAllTargetChoices()) {
+                    for (forge.game.card.Card c : tc.getTargetCards()) sb.append(",c").append(c.getId());
+                    for (Player p : tc.getTargetPlayers()) sb.append(",p").append(p.getId());
+                    for (forge.game.spellability.SpellAbility ts : tc.getTargetSpells()) sb.append(",s").append(ts.getHostCard() != null ? ts.getHostCard().getName() : "?");
+                }
+            }
+            return sb.toString();
         }
     }
 }

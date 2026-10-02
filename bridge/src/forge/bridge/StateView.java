@@ -3,6 +3,7 @@ package forge.bridge;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Supplier;
 
 import com.google.common.collect.Multiset;
 import com.google.gson.JsonArray;
@@ -68,8 +69,10 @@ public final class StateView {
             // Current rules text after every effect, from the live card: the view's tracked copy of it stays empty in
             // a headless game. Then the rest of Forge's card-detail text (counters, attachments, exiled-with, chosen
             // colour/type, shields...).
-            String rules = canShow ? clean(c.getAbilityText()) : "";
-            String detail = clean(CardDetailUtil.composeCardText(cv.getCurrentState(), c.getGame().getView(), canShow));
+            String rules = canShow ? clean(rendered(c.getGame(), "rules text of " + c.getName(), "printed Oracle text shown",
+                    c::getAbilityText, c::getOracleText)) : "";
+            String detail = clean(rendered(c.getGame(), "card detail of " + c.getName(), "left out",
+                    () -> CardDetailUtil.composeCardText(cv.getCurrentState(), c.getGame().getView(), canShow), () -> ""));
             String text = rules.isEmpty() || detail.contains(rules) ? detail : (rules + (detail.isEmpty() ? "" : "\n" + detail));
             if (!text.isEmpty()) o.addProperty("text", text);
         }
@@ -82,6 +85,27 @@ public final class StateView {
         if (c.isPhasedOut()) o.addProperty("phasedOut", true);
         if (!c.getController().equals(c.getOwner())) o.addProperty("owner", label(viewer, c.getOwner()));
         return o;
+    }
+
+    /** Where rendering fallbacks are reported (set by AgentBridge); each distinct one once per game. */
+    static volatile BridgeClient warnings;
+    private static final Set<String> warned = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * Text from one of Forge's live renderers, which can throw for some cards: Card.getAbilityText on a modal
+     * triggered ability with no activating player (Ertai Resurrected on the battlefield) dereferences it while counting
+     * each mode's targets. A failed rendering never breaks the decision: the fallback stands in, and a bridge warning
+     * says so.
+     */
+    private static String rendered(Game game, String what, String instead, Supplier<String> render, Supplier<String> fallback) {
+        try {
+            return render.get();
+        } catch (RuntimeException e) {
+            String msg = what + " couldn't be rendered (" + e.getClass().getSimpleName() + "); " + instead;
+            BridgeClient w = warnings;
+            if (w != null && warned.add(game.getId() + "|" + msg)) w.warn(msg);
+            return fallback.get();
+        }
     }
 
     /** Plain text: no HTML from Forge's display formatting, normalized line breaks. */
@@ -190,7 +214,8 @@ public final class StateView {
                 JsonObject e = new JsonObject();
                 e.addProperty("controller", label(viewer, si.getSpellAbility().getActivatingPlayer()));
                 e.addProperty("source", si.getSpellAbility().getHostCard() != null ? si.getSpellAbility().getHostCard().getName() : "?");
-                e.addProperty("description", clean(StackItemView.get(si).getText()));
+                e.addProperty("description", clean(rendered(game, "stack text of " + e.get("source").getAsString(), "left out",
+                        () -> StackItemView.get(si).getText(), () -> "")));
                 JsonArray tg = targets(si.getSpellAbility(), viewer);
                 if (tg.size() > 0) e.add("targets", tg);
                 st.add(e);

@@ -28,6 +28,8 @@ final class AgentChannel {
      * London-mulligan bottom...); InputDriver and AgentGuiGame label the decision with it.
      */
     volatile String kindHint = null;
+    /** Bot-only tags for the optional effect a yes/no question is about (set by AgentControllerHuman.confirmAction). */
+    volatile JsonObject confirmHints = null;
     /** Informational messages from Forge (notifications, reveals) since the last decision; shown with the next one. */
     private final List<String> notices = new ArrayList<>();
     private static final int MAX_NOTICES = 12;

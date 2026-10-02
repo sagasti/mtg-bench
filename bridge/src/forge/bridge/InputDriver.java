@@ -164,6 +164,12 @@ final class InputDriver implements Observer, Runnable {
     private int batches = 0;
     /** Single-click questions asked on the current input. */
     private int asks = 0;
+    /** What the current payment still owed when Auto was pressed (null: not pressed since), and whether Auto failed on it. */
+    private String owedAtAuto = null;
+    private boolean autoFailed = false;
+    /** Whether the last Auto press was seen starting its payment task, and presses Forge ignored on this payment. */
+    private boolean autoStarted = false;
+    private int autoIgnored = 0;
 
     private void drive(Input in) throws Exception {
         trace("drive " + in.getClass().getSimpleName());
@@ -177,6 +183,10 @@ final class InputDriver implements Observer, Runnable {
         declarationKey = key;
         batches = 0;
         asks = 0;
+        owedAtAuto = null;
+        autoFailed = false;
+        autoStarted = false;
+        autoIgnored = 0;
         // The game thread posts the input's first message to the event thread after announcing the input, so the
         // flushes in awaitMessage can run before it is even posted; until it has run, the prompt and buttons are the
         // previous input's (and InputAttack has no defender yet). Wait for this input's own message, briefly.
@@ -283,6 +293,19 @@ final class InputDriver implements Observer, Runnable {
         }
     }
 
+    /** The cards a targeting input accepts (reflection: private field "choices"), or null for other inputs. */
+    @SuppressWarnings("unchecked")
+    private static java.util.Collection<Card> targetChoices(Input in) {
+        if (!(in instanceof InputSelectTargets)) return null;
+        try {
+            java.lang.reflect.Field f = InputSelectTargets.class.getDeclaredField("choices");
+            f.setAccessible(true);
+            return f.get(in) instanceof java.util.Collection<?> c ? (java.util.Collection<Card>) c : null;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return null;
+        }
+    }
+
     /** Cards already chosen for the bottom in a London mulligan (reflection: private field). */
     private static java.util.Collection<?> londonSelected(Input in) {
         try {
@@ -337,6 +360,7 @@ final class InputDriver implements Observer, Runnable {
                 f.setAccessible(true);
                 return String.valueOf(f.get(in));
             }
+            if (in instanceof InputSelectTargets) return String.valueOf(targetChoices(in));
         } catch (ReflectiveOperationException | RuntimeException e) { return "?"; }
         return "n/a";
     }
@@ -387,25 +411,28 @@ final class InputDriver implements Observer, Runnable {
 
         List<PlayerControllerExternal.Opt> opts = new ArrayList<>();
         List<Card> cards = new ArrayList<>();
-        for (Player p : game.getPlayers()) {
-            cards.addAll(p.getCardsIn(ZoneType.Battlefield));
-            if (p.equals(ch.player)) {
-                cards.addAll(p.getCardsIn(ZoneType.Hand));
-                cards.addAll(p.getCardsIn(ZoneType.Graveyard));
-                cards.addAll(p.getCardsIn(ZoneType.Exile));
-                cards.addAll(p.getCardsIn(ZoneType.Command));
-            }
-        }
         java.util.Collection<?> listChoices = entityList(in, "validChoices");
+        java.util.Collection<Card> targetChoices = targetChoices(in);
         if (listChoices != null) {
             // "Choose from a list" inputs: offer exactly the input's own valid choices (hover text can be empty for them).
-            cards.clear();
             for (Object o : listChoices) if (o instanceof Card lc) cards.add(lc);
-        }
-        if (in instanceof InputLondonMulligan) {
+        } else if (targetChoices != null) {
+            // Targets: the input's own valid cards, in whatever zone and under whoever's control (an opponent's
+            // graveyard, exile...). Forge built the list for this seat, so it holds nothing the seat can't select.
+            cards.addAll(targetChoices);
+        } else if (in instanceof InputLondonMulligan) {
             // Forge's input offers no card actions (a human clicks the hand); the hand is the choice.
-            cards.clear();
             cards.addAll(ch.player.getCardsIn(ZoneType.Hand));
+        } else {
+            for (Player p : game.getPlayers()) {
+                cards.addAll(p.getCardsIn(ZoneType.Battlefield));
+                if (p.equals(ch.player)) {
+                    cards.addAll(p.getCardsIn(ZoneType.Hand));
+                    cards.addAll(p.getCardsIn(ZoneType.Graveyard));
+                    cards.addAll(p.getCardsIn(ZoneType.Exile));
+                    cards.addAll(p.getCardsIn(ZoneType.Command));
+                }
+            }
         }
         for (Card c : cards) {
             String act;
@@ -421,8 +448,10 @@ final class InputDriver implements Observer, Runnable {
             if (in instanceof InputPassPriority && withheld.contains(c.getId())) continue;
             String who = c.getController().equals(ch.player) ? "your " : "opponent's ";
             String zone = c.getZone() != null && c.getZone().getZoneType() != ZoneType.Battlefield ? " [" + c.getZone().getZoneType() + "]" : "";
-            opts.add(new PlayerControllerExternal.Opt(StateView.id(c), act + ": " + who + c.getName() + (c.isCreature() ? " " + c.getNetPower() + "/" + c.getNetToughness() : "")
-                    + (c.isTapped() ? " (tapped)" : "") + zone, c.getName(), botTags(in, c)));
+            // A face-down card the seat may not look at (a morph, a card exiled face down) is named as such.
+            String name = c.isFaceDown() && !c.getView().canFaceDownBeShownTo(ch.player.getView()) ? "face-down card" : c.getName();
+            opts.add(new PlayerControllerExternal.Opt(StateView.id(c), act + ": " + who + name + (c.isCreature() ? " " + c.getNetPower() + "/" + c.getNetToughness() : "")
+                    + (c.isTapped() ? " (tapped)" : "") + zone, name, botTags(in, c)));
         }
         if (in instanceof InputSelectTargets || in instanceof InputSelectEntitiesFromList || in instanceof InputAttack) {
             for (Player p : game.getPlayers()) if (!(in instanceof InputAttack && p.equals(ch.player)) && (listChoices != null ? listChoices.contains(p) : playerSelectable(in, p))) {
@@ -600,18 +629,46 @@ final class InputDriver implements Observer, Runnable {
                 if (src == null || !interchangeableSource(src)) interchangeable = false;
             }
             int need = remainingMana(in);
-            // Forge enables Auto only when the cost can be paid. Unpayable: cancel (the cast rolls back).
-            // Every legal payment taps the same kind of source: let Auto pay (unless manaPayment: always). Otherwise the
-            // agent picks the sources.
-            if (!gui.okEnabled) {
+            // Never compare or re-plan while a payment task may still run: its controller swap would race the plan's.
+            // (drive() waits for it before each step; this keeps that true here.) Retried next step.
+            if (((InputPayMana) in).isActivatingManaAbility() || manaTask() > 0) {
+                trace("payment: a payment task is still running; waiting");
+                return true;
+            }
+            // Auto pressed on this payment last step and nothing changed: Forge's AI payer couldn't pay. No more Auto here.
+            // Only a press whose task was seen starting counts; a press Forge ignored is retried, at most twice.
+            String owed = owedKey(in);
+            if (owedAtAuto != null && owedAtAuto.equals(owed) && !autoFailed) {
+                if (autoStarted || ++autoIgnored > 2) {
+                    autoFailed = true;
+                    trace("payment: Auto changed nothing (task " + (autoStarted ? "ran" : "never started") + "); asking for sources instead");
+                } else {
+                    trace("payment: Auto press ignored by Forge; pressing again");
+                }
+            }
+            owedAtAuto = null;
+            // Forge enables Auto from a plan it makes once per payment and keeps while plain sources are tapped, so the
+            // button stays enabled after the sources it planned are gone (tapped for another part of the cost). Plan again
+            // now: no plan means the cost can't be paid any more, whatever the button says.
+            List<Card> plan = freshAutoPlan(in);
+            trace("payment: need=" + need + " sources=" + sources.stream().map(o -> o.id + ":" + o.card).toList() + " plan=" + plan
+                    + " pool=" + ch.player.getManaPool().totalMana() + " autoFailed=" + autoFailed);
+            // Unpayable: cancel (the cast rolls back). Every legal payment taps the same kind of source: let Auto pay
+            // (unless manaPayment: always). Otherwise, or once Auto has failed on this payment, the agent picks the sources.
+            if (!gui.okEnabled || plan == null || (autoFailed && sources.isEmpty())) {
                 ch.auto("forced", "mana_payment", "pay_or_else".equals(ch.kindHint) ? "cost can't be paid: payment declined" : "cost can't be paid: cast cancelled");
                 if (gui.cancelEnabled) click("cancel", game);
                 return true;
             }
-            if (sources.size() <= need || (!ch.ctx.alwaysAskMana && kinds.size() <= 1 && interchangeable)) {
+            if (!autoFailed && (sources.size() <= need || (!ch.ctx.alwaysAskMana && kinds.size() <= 1 && interchangeable))) {
                 if (sources.size() <= need) ch.auto("forced", "mana_payment", "exactly enough sources");
                 else ch.auto("policy", "mana_payment", "interchangeable sources: same-name lands, nothing attached, no counters (Forge's Auto pays)");
+                owedAtAuto = owed;
                 click("ok", game);
+                // InputPayMana.onOk locks the payment before handing Auto to a game thread, and drive() waits for the
+                // lock and the task before the next step; a press it ignored leaves both clear.
+                autoStarted = ((InputPayMana) in).isActivatingManaAbility() || manaTask() > 0;
+                trace("payment: Auto pressed; task " + (autoStarted ? "started" : "not started"));
                 return true;
             }
             if (++batches > ch.ctx.maxRetries + 1) {
@@ -651,7 +708,7 @@ final class InputDriver implements Observer, Runnable {
             List<PlayerControllerExternal.Opt> two = new ArrayList<>();
             if (gui.okEnabled) two.add(new PlayerControllerExternal.Opt(yes, "Button: " + gui.okLabel, null));
             if (gui.cancelEnabled) two.add(new PlayerControllerExternal.Opt(no, "Button: " + gui.cancelLabel, null));
-            List<String> r = ch.ask(kind, prompt, two, 1, 1, null);
+            List<String> r = ch.ask(kind, prompt, two, 1, 1, yesNo ? ch.confirmHints : null);
             String pick = r == null || r.isEmpty() ? (gui.cancelEnabled ? no : yes) : r.get(0);
             click(pick.equals(yes) ? "ok" : "cancel", game);
             return true;
@@ -784,6 +841,38 @@ final class InputDriver implements Observer, Runnable {
     /** A source whose choice can't matter beyond its name: a land with nothing attached and no counters. */
     static boolean interchangeableSource(Card c) {
         return c.isLand() && !c.isCreature() && c.getAttachedCards().isEmpty() && (c.getCounters() == null || c.getCounters().isEmpty());
+    }
+
+    /**
+     * The sources Forge's Auto button would tap, planned afresh (InputPayMana caches its plan; the methods and field are
+     * private), or null when Forge's AI payer finds no way to pay what is still owed.
+     */
+    @SuppressWarnings("unchecked")
+    private static List<Card> freshAutoPlan(Input in) {
+        try {
+            java.lang.reflect.Method invalidate = InputPayMana.class.getDeclaredMethod("invalidateAutoPayManaSources");
+            java.lang.reflect.Method ensure = InputPayMana.class.getDeclaredMethod("ensureAutoPayManaSources");
+            java.lang.reflect.Field f = InputPayMana.class.getDeclaredField("autoPayManaSources");
+            invalidate.setAccessible(true);
+            ensure.setAccessible(true);
+            f.setAccessible(true);
+            invalidate.invoke(in);
+            ensure.invoke(in);
+            return f.get(in) instanceof java.util.Collection<?> c ? new ArrayList<>((java.util.Collection<Card>) c) : null;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return List.of(); // can't plan: trust Forge's button (the Auto budget still applies)
+        }
+    }
+
+    /** What a payment input still owes, and the mana floating in the pool: both unchanged after Auto means Auto failed. */
+    private String owedKey(Input in) {
+        try {
+            java.lang.reflect.Field f = InputPayMana.class.getDeclaredField("manaCost");
+            f.setAccessible(true);
+            return f.get(in) + "|" + ch.player.getManaPool().totalMana();
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return "?";
+        }
     }
 
     /** Mana still owed by this payment input (InputPayMana.manaCost is protected). */

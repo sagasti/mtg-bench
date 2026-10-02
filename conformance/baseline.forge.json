@@ -1,9 +1,9 @@
 {
-  "createdAt": "2026-10-02T13:20:21.938Z",
+  "createdAt": "2026-10-02T16:04:24.409Z",
   "provenance": {
     "harness": {
-      "commit": "5a730359202416a005c1b0deef021cebc9e1a15f",
-      "dirty": false
+      "commit": "552848d5389b1be0f42018b09377b4cdd03a7dd1",
+      "dirty": true
     },
     "engine": "forge",
     "cardsJsonSha256": "080c88ef3710724afa2a1e4e91c4beed58ef95588a33b4b3e501440f1b5f7143",
@@ -14,7 +14,7 @@
     "forge": {
       "commit": "2ccbbb01326e28b38788c50f7f0e01b5d12f32b3",
       "jar": "forge-gui-desktop-2.0.15-SNAPSHOT-jar-with-dependencies.jar",
-      "bridgeJarSha256": "db9a5b596c0a9076c6b0181e5c4e560b4ada588a845fe77f2f7cc2b8b2167153"
+      "bridgeJarSha256": "dd4ed81c4cad823ee7db5108f14fea2f973da553fbc2829aa9c3b9eafabd457f"
     }
   },
   "settings": {
@@ -34,6 +34,7 @@
       ],
       "engineExceptions": 0,
       "bridgeErrors": 0,
+      "bridgeWarnings": 0,
       "decisions": {
         "0:attackers": 19,
         "0:blockers": 1,
@@ -69,6 +70,7 @@
       ],
       "engineExceptions": 0,
       "bridgeErrors": 0,
+      "bridgeWarnings": 0,
       "decisions": {
         "0:assign_damage": 1,
         "0:attackers": 20,
@@ -109,6 +111,7 @@
       ],
       "engineExceptions": 0,
       "bridgeErrors": 0,
+      "bridgeWarnings": 0,
       "decisions": {
         "0:attackers": 19,
         "0:blockers": 11,
@@ -147,6 +150,7 @@
       ],
       "engineExceptions": 0,
       "bridgeErrors": 0,
+      "bridgeWarnings": 0,
       "decisions": {
         "0:attackers": 20,
         "0:blockers": 11,
@@ -159,6 +163,43 @@
         "0:priority": 46,
         "0:scry": 1,
         "0:targets": 10
+      },
+      "forfeits": 0,
+      "delegations": 0
+    },
+    "animate-vs-ertai": {
+      "error": null,
+      "games": 3,
+      "endReasons": [
+        "AllOpponentsLost",
+        "Draw"
+      ],
+      "engineExceptions": 0,
+      "bridgeErrors": 0,
+      "bridgeWarnings": 3,
+      "decisions": {
+        "0:attackers": 29,
+        "0:choose_cards": 5,
+        "0:choose_entity": 12,
+        "0:confirm": 9,
+        "0:discard": 4,
+        "0:mulligan": 3,
+        "0:order_triggers": 5,
+        "0:play_draw": 1,
+        "0:priority": 174,
+        "0:targets": 45,
+        "1:attackers": 21,
+        "1:choose_cards": 15,
+        "1:choose_entity": 27,
+        "1:confirm": 3,
+        "1:discard": 4,
+        "1:mana_payment": 46,
+        "1:mulligan": 3,
+        "1:order_triggers": 9,
+        "1:play_draw": 2,
+        "1:priority": 281,
+        "1:scry": 6,
+        "1:targets": 28
       },
       "forfeits": 0,
       "delegations": 0

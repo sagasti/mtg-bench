@@ -1,0 +1,14 @@
+{
+  "seatId": "ertai",
+  "main": [
+    "Ertai Resurrected", "Ertai Resurrected", "Ertai Resurrected", "Ertai Resurrected",
+    "Ertai Resurrected", "Ertai Resurrected", "Ertai Resurrected", "Ertai Resurrected",
+    "Ertai Resurrected", "Ertai Resurrected",
+    "Counterspell", "Mind Rot", "Duress", "Opt", "Ponder", "Think Twice", "Divination", "Brainstorm",
+    "Counterspell", "Mind Rot", "Duress", "Opt", "Divination",
+    "Island", "Island", "Island", "Island", "Island", "Island", "Island", "Island", "Island",
+    "Swamp", "Swamp", "Swamp", "Swamp", "Swamp", "Swamp", "Swamp", "Swamp"
+  ],
+  "sideboard": [],
+  "basics": { "Island": 9, "Swamp": 8 }
+}

@@ -164,7 +164,22 @@ public class AgentGuiGame extends AbstractGuiGame {
             return i < 0 ? initialInput : inputOptions.get(i);
         }
         ch.delegated("free_text", "free-text input (e.g. naming a card) not offered in the spike");
-        return initialInput;
+        // A free number: Forge re-asks until it gets one, so the (non-numeric) initial input would loop forever. Cancel.
+        return isNumeric ? null : initialInput;
+    }
+
+    /**
+     * Forge lists min..cutoff plus "Other...", which opens a free-number input. One bounded list instead (at most 31
+     * values, like the AI-controller bridge's announce_x); none chosen cancels, as in Forge.
+     */
+    @Override
+    public Integer getInteger(String message, int min, int max, int cutoff) {
+        if (max <= min || cutoff < min) return min;
+        int hi = (int) Math.min(max, (long) min + 30);
+        List<String> labels = new ArrayList<>();
+        for (int v = min; v <= hi; v++) labels.add(String.valueOf(v));
+        int i = chooseIndex("choose_number", message, labels, true);
+        return i < 0 ? null : min + i;
     }
 
     @Override

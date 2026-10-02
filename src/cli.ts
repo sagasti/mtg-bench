@@ -188,7 +188,7 @@ async function main() {
       const { runDir, current } = await runConformance(cfg, engine, { runId: flag(args, "run-id"), force: args.includes("--force"), parallel: flag(args, "parallel") ? Number(flag(args, "parallel")) : undefined });
       for (const [id, m] of Object.entries(current.matches)) {
         const total = Object.values(m.decisions).reduce((a, b) => a + b, 0);
-        console.log(`  ${id.padEnd(18)} ${m.games} game(s) [${m.endReasons.join(", ")}] · ${total} decisions · ${m.forfeits} forfeits · ${m.delegations} delegated · ${m.engineExceptions} engine exceptions · ${m.bridgeErrors} bridge errors${m.error ? ` · ERROR ${m.error}` : ""}`);
+        console.log(`  ${id.padEnd(18)} ${m.games} game(s) [${m.endReasons.join(", ")}] · ${total} decisions · ${m.forfeits} forfeits · ${m.delegations} delegated · ${m.engineExceptions} engine exceptions · ${m.bridgeErrors} bridge errors · ${m.bridgeWarnings ?? 0} bridge warnings${m.error ? ` · ERROR ${m.error}` : ""}`);
       }
       if (args.includes("--update")) {
         fs.writeFileSync(baselineFile, JSON.stringify(current, null, 2) + "\n");

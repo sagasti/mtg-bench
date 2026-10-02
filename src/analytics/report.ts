@@ -11,7 +11,7 @@ import type { BenchConfig, Pricing } from "../config.ts";
 import { scanEngineErrors } from "../engine/forge/log.ts";
 import type { MatchResult } from "../engine/types.ts";
 import { podRatings, rate } from "../rating/bt.ts";
-import { cappedDrawsBySeat, censoredBySeat, outcomesFromMatches, podLabel, readMatches } from "../rating/outcomes.ts";
+import { cappedDrawsBySeat, censoredBySeat, loopDrawsBySeat, outcomesFromMatches, podLabel, readMatches } from "../rating/outcomes.ts";
 import { readJsonl } from "../util/log.ts";
 import { describeProvenance, type Provenance } from "../util/provenance.ts";
 import { type CallRecord, costOf, type DecisionRecord } from "./recorder.ts";
@@ -175,6 +175,7 @@ export function summarize(runDirs: string[], cfg?: BenchConfig, opts: { maxFailu
   const ratings = rate(outcomes, { bootstrap: 500 });
   const byPod = podRatings(outcomes);
   const cappedDraws = cappedDrawsBySeat(matches);
+  const loopDraws = loopDrawsBySeat(matches);
   const censored = censoredBySeat(matches);
   // Matches skipped because a seat was over its budget: per seat that went over (why) and per seat that lost the match.
   const overBudget = new Map<string, string>();
@@ -252,8 +253,11 @@ export function summarize(runDirs: string[], cfg?: BenchConfig, opts: { maxFailu
     if (m.engineErrors?.length) matchesWithEngineErrors++;
     for (const e of m.engineErrors ?? []) add(engineErrors, `${e.kind} at ${e.at || "?"}`);
   }
+  // Things the bridge worked around without breaking a decision (a card text Forge couldn't render...), by message.
+  const warnings = new Map<string, number>();
+  for (const m of matches) for (const w of m.warnings ?? []) warnings.set(w.msg, (warnings.get(w.msg) ?? 0) + w.count);
 
-  return { incomplete, versions, specViolations, decisions, calls, unrecorded, matches, bySeat, bySeatPhase, byKind, ratings, byPod, merged: runDirs.length > 1, excluded, maxFailureRate, cappedDraws, censored, overBudget, notPlayed, games, reasons, delegated, forfeited, provenance, engineErrors, matchesWithEngineErrors, playWinRate: decided.length ? playWins / decided.length : null, pricing };
+  return { incomplete, versions, specViolations, decisions, calls, unrecorded, matches, bySeat, bySeatPhase, byKind, ratings, byPod, merged: runDirs.length > 1, excluded, maxFailureRate, cappedDraws, loopDraws, censored, overBudget, notPlayed, games, reasons, delegated, forfeited, provenance, engineErrors, matchesWithEngineErrors, warnings, playWinRate: decided.length ? playWins / decided.length : null, pricing };
 }
 
 export function renderReport(s: ReturnType<typeof summarize>, title: string): string {
@@ -289,7 +293,7 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
     // The tags src/agents/bots.ts reads: keep this list in step with it.
     L.push("**Information asymmetry.** Bot seats get computed hints that LLM seats never see (by design: computed assessments stay out of prompts, HANDOFF §6 2026-10-01). "
       + "rank-bot reads, per option: `type`, `cmc` and `sorcerySpeedOk` (priority), `keep` (mulligan), `toughness` and `evasive` (attackers), `attackerPower`, `blockerSurvives` and `killsAttacker` (blockers), `hostile` (targets); "
-      + "per question: `handLands` and `handSize` (mulligan), `opponentMaxUntappedPower` (attacks), `incomingLethal` (blocks). random reads none. "
+      + "per question: `handLands` and `handSize` (mulligan), `opponentMaxUntappedPower` (attacks), `incomingLethal` (blocks), `api` and `copies` (yes/no questions about an optional effect). random reads none. "
       + "forge-ai's games are played by Forge's own AI, which makes its own evaluations of the game. Read bot-vs-LLM ratings with this in mind.", "");
   }
   if (nPods > 1) {
@@ -377,6 +381,13 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
     L.push("", "Matches: " + s.matches.filter((m) => m.engineErrors?.length).map((m) => `${m.matchId} (${m.engineErrors!.length})`).join(", "), "");
   }
 
+  if (s.warnings.size) {
+    L.push("## Bridge warnings", "", "Things the bridge worked around without breaking a decision, each counted once per game; that decision went ahead with less information.", "");
+    L.push("| Games | Warning |", "|---|---|");
+    for (const [k, v] of [...s.warnings.entries()].sort((a, b) => b[1] - a[1])) L.push(`| ${v} | ${k} |`);
+    L.push("");
+  }
+
   L.push("## Who made each in-game decision", "");
   if (!s.provenance.size) L.push("No in-game decisions recorded.", "");
   else {
@@ -432,6 +443,8 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
   L.push(`End reasons: ${Object.entries(s.reasons).map(([r, n]) => `${r} ${n}`).join(", ") || "–"}`);
   const capped = [...s.cappedDraws.values()].reduce((a, b) => a + b, 0) / 2;
   L.push("", `Turn-cap draws: ${capped ? `${capped} game(s); by seat: ${[...s.cappedDraws.entries()].sort().map(([seat, n]) => `${seat} ${n}`).join(", ")}` : "none"}. A drawn game counts half a win for each seat in the ratings.`);
+  const looped = [...s.loopDraws.values()].reduce((a, b) => a + b, 0) / 2;
+  L.push("", `Unbreakable-loop draws: ${looped ? `${looped} game(s); by seat: ${[...s.loopDraws.entries()].sort().map(([seat, n]) => `${seat} ${n}`).join(", ")}` : "none"}. The bridge draws a game whose state recurs unchanged 20 times in one turn (docs/DECISION-PROVENANCE.md); counted like a turn-cap draw.`);
   const errs = s.matches.filter((m) => m.error);
   if (errs.length) L.push("", `**${errs.length} match(es) failed:** ${errs.slice(0, 5).map((m) => `${m.matchId}: ${m.error}`).join("; ")}`);
 
@@ -454,6 +467,7 @@ export function writeReport(runDir: string, cfg?: BenchConfig) {
     podRatings: s.byPod.pods.length > 1 ? { pods: s.byPod.pods.map((p) => podLabel(p, s.merged)), ratings: Object.fromEntries(s.byPod.ratings), sdBetweenPods: Object.fromEntries(s.byPod.sd) } : undefined,
     excluded: s.excluded.size ? { maxFailureRate: s.maxFailureRate, seats: Object.fromEntries(s.excluded) } : undefined,
     cappedDraws: Object.fromEntries(s.cappedDraws),
+    loopDraws: Object.fromEntries(s.loopDraws),
     overBudget: s.overBudget.size ? Object.fromEntries(s.overBudget) : undefined,
     notPlayed: s.notPlayed.size ? Object.fromEntries(s.notPlayed) : undefined,
     censored: Object.fromEntries(s.censored),
@@ -462,6 +476,7 @@ export function writeReport(runDir: string, cfg?: BenchConfig) {
     delegated: Object.fromEntries([...s.delegated.entries()].map(([k, m]) => [k, Object.fromEntries(m)])),
     forfeited: Object.fromEntries([...s.forfeited.entries()].map(([k, m]) => [k, Object.fromEntries(m)])),
     engineErrors: { matches: s.matchesWithEngineErrors, byKind: Object.fromEntries(s.engineErrors) },
+    warnings: s.warnings.size ? Object.fromEntries(s.warnings) : undefined,
     provenance: Object.fromEntries([...s.provenance.entries()].map(([k, p]) => [k, { agent: p.agent, forced: Object.fromEntries(p.forced), policy: Object.fromEntries(p.policy), delegated: Object.fromEntries(p.delegated), forfeit: Object.fromEntries(p.forfeit) }])),
   };
   fs.writeFileSync(path.join(runDir, "summary.json"), JSON.stringify(json, null, 2));

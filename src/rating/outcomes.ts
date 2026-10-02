@@ -36,9 +36,18 @@ export function podLabel(key: string, merged: boolean): string {
 
 /** Games that ended at the turn cap (a draw), per seat: the bridge's "Draw (turn cap of N turns)", the mock's "turn-cap". */
 export function cappedDrawsBySeat(matches: MatchResult[]): Map<string, number> {
+  return drawsBySeat(matches, /turn.cap/i);
+}
+
+/** Games the bridge drew because the same state kept recurring ("Draw (unbreakable loop)"), per seat. */
+export function loopDrawsBySeat(matches: MatchResult[]): Map<string, number> {
+  return drawsBySeat(matches, /unbreakable loop/i);
+}
+
+function drawsBySeat(matches: MatchResult[], reason: RegExp): Map<string, number> {
   const out = new Map<string, number>();
   for (const m of matches) for (const g of m.games) {
-    if (g.winner !== null || !/turn.cap/i.test(g.reason)) continue;
+    if (g.winner !== null || !reason.test(g.reason)) continue;
     for (const seat of m.seats) out.set(seat, (out.get(seat) ?? 0) + 1);
   }
   return out;
