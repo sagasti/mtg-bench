@@ -28,6 +28,7 @@ event:
   parallelMatches: 4              # matches in a round run concurrently
   priorityStops: smart            # Forge: smart = ask at meaningful priority stops; all = every priority pass
   manaPayment: smart              # Forge: smart = ask which lands to tap when it can matter; always = every payment
+  maxFailureRate: 0.05            # report: seats with forfeits + fallbacks + API errors above this share of decisions are listed apart
 
 engine:
   type: forge                     # forge | mock (mock = pipeline testing only)

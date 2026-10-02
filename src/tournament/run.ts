@@ -12,7 +12,7 @@ import { Recorder } from "../analytics/recorder.ts";
 import { writeReport } from "../analytics/report.ts";
 import { loadDb } from "../cards/db.ts";
 import { loadCube, loadRankings } from "../cards/cube.ts";
-import type { BenchConfig } from "../config.ts";
+import { type BenchConfig, configHash } from "../config.ts";
 import { buildDeck, type Deck, saveDeck } from "../deckbuild/deckbuild.ts";
 import { type CardInstance, runDraft } from "../draft/draft.ts";
 import { type GameEngine, type MatchResult, replayable } from "../engine/types.ts";
@@ -59,7 +59,8 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
   const runDir = freshRunDir(cfg.outputDir, runId, opts.force);
   // Snapshot config (keys live in env vars, so this is safe to keep) + prompts used; a derived run also records its source.
   const provenance = collectProvenance(cfg, engine.name);
-  fs.writeFileSync(path.join(runDir, "config.json"), JSON.stringify({ ...cfg, source: opts.source, provenance }, null, 2));
+  const hash = configHash(cfg); // pre-registration: `run --expect-hash` checks it before anything runs
+  fs.writeFileSync(path.join(runDir, "config.json"), JSON.stringify({ ...cfg, source: opts.source, provenance, configHash: hash }, null, 2));
   fs.cpSync(promptFile(ev.promptVersion, ""), path.join(runDir, "prompts"), { recursive: true });
 
   const cube = loadCube(db, ev.cube, cfg.forgeRes);
@@ -74,7 +75,7 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
   const allMatches: MatchResult[] = [];
   info(`run ${runId}: ${seats.length} seats, ${ev.pods} pod(s), ${ev.format}, bo${ev.gamesPerMatch}, engine=${engine.name}, knowledge=${ev.knowledge}`);
   if (source) info(`${source.src.mode} from ${source.src.runDir}: study${source.src.mode === "decks" ? ", draft and deckbuild" : " and draft"} skipped`);
-  recorder.event("run_start", { cube: cube.name, cubeSize: cube.cards.length, seed: ev.seed, provenance,
+  recorder.event("run_start", { cube: cube.name, cubeSize: cube.cards.length, seed: ev.seed, provenance, configHash: hash,
     anchors: anchorVersions(cfg.seats, engine.name, cfg.engine.controller),
     seats: cfg.seats.map((s) => ({ id: s.id, provider: s.provider, model: s.model, temperature: s.temperature })), source: opts.source, sourceSeats: source?.seats });
 

@@ -2,6 +2,7 @@
  * Benchmark configuration (YAML). See docs/AGENTS.md for the full reference
  * and config/event.example.yaml for a filled-in example.
  */
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
@@ -78,6 +79,8 @@ export interface EventConfig {
   priorityStops: "smart" | "all";
   /** Forge: smart = ask which lands to tap only when the choice can matter; always = every payment. */
   manaPayment: "smart" | "always";
+  /** Report: a seat whose forfeits + fallbacks + API errors exceed this share of its decisions is listed apart from the leaderboard. */
+  maxFailureRate: number;
 }
 
 export interface EngineConfig {
@@ -111,7 +114,7 @@ const EVENT_DEFAULTS: Omit<EventConfig, "name" | "cube"> = {
   pods: 1, seed: 1, packs: 3, packSize: 15, format: "round-robin", rounds: 3, gamesPerMatch: 3, minDeckSize: 40,
   knowledge: "oracle+tools", promptVersion: "v2", maxToolCallsPerDecision: 6, maxRetries: 3,
   decisionTimeoutSec: 180, carryNotes: true, maxGameTurns: 40, recordPrompts: false, rotateSeats: true,
-  cubeStudy: true, briefMaxWords: 1000, briefScope: "all", parallelMatches: 4, priorityStops: "smart", manaPayment: "smart",
+  cubeStudy: true, briefMaxWords: 1000, briefScope: "all", parallelMatches: 4, priorityStops: "smart", manaPayment: "smart", maxFailureRate: 0.05,
 };
 
 export function loadConfig(file: string): BenchConfig {
@@ -168,6 +171,18 @@ export function validateConfig(cfg: BenchConfig) {
   if (cfg.event.format === "swiss" && !(Number.isInteger(cfg.event.rounds) && cfg.event.rounds >= 1 && cfg.event.rounds <= podSize - 1)) errs.push(`event.rounds must be 1–${podSize - 1} for Swiss (${podSize} seats)`);
   if (cfg.engine.type === "forge" && !cfg.engine.forgeDir) errs.push("engine.forgeDir is required when engine.type is forge");
   if (errs.length) throw new Error("Invalid config:\n  - " + errs.join("\n  - "));
+}
+
+/**
+ * Pre-registration hash: SHA-256 of the effective config with keys sorted, covering everything that shapes the
+ * experiment (event, seats, pricing, engine settings) but not where it runs: outputDir, forgeRes and the engine's
+ * forgeDir / forgeJar / bridgeJar / java / javaOpts are left out (the run id isn't in the config).
+ */
+export function configHash(cfg: BenchConfig): string {
+  const { forgeDir, forgeJar, bridgeJar, java, javaOpts, ...engine } = cfg.engine;
+  const sorted = (v: unknown): unknown => Array.isArray(v) ? v.map(sorted)
+    : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sorted((v as any)[k])])) : v;
+  return crypto.createHash("sha256").update(JSON.stringify(sorted({ event: cfg.event, engine, seats: cfg.seats, pricing: cfg.pricing }))).digest("hex");
 }
 
 /** The seat's config switches reasoning off (OpenRouter's unified `reasoning` field, OpenAI's effort, or Anthropic without thinking). */

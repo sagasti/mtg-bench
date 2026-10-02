@@ -4,10 +4,10 @@
  *   cards index --forge-res <dir>         build data/cards.json from Forge card scripts
  *   cubes --forge-res <dir>               list cubes bundled with Forge and their sizes
  *   check <config.yaml> [--ping]          validate config, keys, card data, cube, engine, rules file
- *   run <config.yaml> [--engine mock|forge] [--pods N] [--run-id ID] [--force] [--forge-res DIR]
+ *   run <config.yaml> [--engine mock|forge] [--pods N] [--run-id ID] [--force] [--forge-res DIR] [--expect-hash H]
  *       [--decks-from RUNDIR | --pools-from RUNDIR] [--allow-seat-changes]   replay a saved run's seating + decks (matches only) or drafted pools (deckbuild + matches)
  *   match <config.yaml> --seats A,B --decks a.dck,b.dck [--matches N] [--parallel N] [--run-id ID] [--force]   head-to-head with fixed decks, no draft
- *   report <runDir...> [--allow-same-seed] [--allow-anchor-changes]   (re)build report.md for one run, or a merged report for several
+ *   report <runDir...> [--allow-same-seed] [--allow-anchor-changes] [--max-failure-rate 0.05]   (re)build report.md for one run, or a merged report for several
  *   rate <runDir...> [--level game|match] [--anchor seat=1500] [--allow-same-seed] [--allow-anchor-changes]
  */
 import fs from "node:fs";
@@ -19,7 +19,7 @@ import { checkSeatSpec } from "./agents/llm.ts";
 import { promptFile } from "./agents/render.ts";
 import { buildIndex, loadDb, saveIndex } from "./cards/db.ts";
 import { loadCube, parseCardList } from "./cards/cube.ts";
-import { loadConfig, missingKeys } from "./config.ts";
+import { configHash, loadConfig, missingKeys } from "./config.ts";
 import { ForgeEngine, resolveForge } from "./engine/forge/forge.ts";
 import { MockEngine } from "./engine/mock/mock.ts";
 import { SUBMIT_TOOL } from "./knowledge/tools.ts";
@@ -84,6 +84,7 @@ async function main() {
       const problems: string[] = [];
       const ok = (s: string) => console.log(`  ✓ ${s}`);
       console.log("Config"); ok(`${cfg.seats.length} seats: ${cfg.seats.map((s) => `${s.id} (${s.provider}${s.model ? `:${s.model}` : ""})`).join(", ")}`);
+      ok(`config hash ${configHash(cfg)} (pre-register it; \`run --expect-hash\` refuses a different config)`);
       problems.push(...missingKeys(cfg));
       console.log("Card data");
       let db;
@@ -132,7 +133,13 @@ async function main() {
       const cfg = loadConfig(positional(args)[0]);
       if (flag(args, "forge-res")) cfg.forgeRes = path.resolve(flag(args, "forge-res")!);
       const engineType = (flag(args, "engine") ?? cfg.engine.type) as "mock" | "forge";
+      cfg.engine.type = engineType;
       if (flag(args, "pods")) cfg.event.pods = Number(flag(args, "pods"));
+      // Pre-registration: the effective config (after the flags above) must hash to what was registered.
+      const expect = flag(args, "expect-hash");
+      if (expect !== undefined && (expect.length < 8 || !configHash(cfg).startsWith(expect.toLowerCase()))) {
+        throw new Error(`config hash ${configHash(cfg)} doesn't match --expect-hash ${expect} (give at least 8 hex digits); the event differs from the registered one`);
+      }
       const miss = missingKeys(cfg);
       if (miss.length) throw new Error("missing API keys:\n  " + miss.join("\n  "));
       const engine = engineType === "forge" ? new ForgeEngine(cfg.engine) : new MockEngine(loadDb());
@@ -172,7 +179,7 @@ async function main() {
     case "report": {
       const dirs = positional(args);
       checkPoolable(dirs, args);
-      const s = summarize(dirs);
+      const s = summarize(dirs, undefined, { maxFailureRate: flag(args, "max-failure-rate") ? Number(flag(args, "max-failure-rate")) : undefined });
       const md = renderReport(s, dirs.length === 1 ? `Run ${path.basename(dirs[0])}` : `Merged report (${dirs.length} runs)`);
       if (dirs.length === 1) fs.writeFileSync(path.join(dirs[0], "report.md"), md);
       console.log(md);

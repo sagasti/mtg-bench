@@ -9,7 +9,7 @@ import { Recorder } from "../analytics/recorder.ts";
 import { writeReport } from "../analytics/report.ts";
 import { loadDb } from "../cards/db.ts";
 import { loadCube, loadRankings, parseCardList } from "../cards/cube.ts";
-import type { BenchConfig } from "../config.ts";
+import { type BenchConfig, configHash } from "../config.ts";
 import { type Deck, deckProblems, saveDeck } from "../deckbuild/deckbuild.ts";
 import { type GameEngine, type MatchResult, replayable } from "../engine/types.ts";
 import { KnowledgeBase } from "../knowledge/tools.ts";
@@ -48,7 +48,7 @@ export async function runHeadToHead(cfg: BenchConfig, engine: GameEngine, opts: 
   }
   const runDir = freshRunDir(cfg.outputDir, runId, opts.force);
   const provenance = collectProvenance(cfg, engine.name);
-  fs.writeFileSync(path.join(runDir, "config.json"), JSON.stringify({ ...cfg, headToHead: opts, provenance }, null, 2));
+  fs.writeFileSync(path.join(runDir, "config.json"), JSON.stringify({ ...cfg, headToHead: opts, provenance, configHash: configHash(cfg) }, null, 2));
   fs.cpSync(promptFile(ev.promptVersion, ""), path.join(runDir, "prompts"), { recursive: true });
 
   const cube = loadCube(db, ev.cube, cfg.forgeRes);
@@ -67,7 +67,7 @@ export async function runHeadToHead(cfg: BenchConfig, engine: GameEngine, opts: 
   const dckFiles = decks.map((d) => saveDeck(deckDir, d)) as [string, string];
   const matchLog = new Jsonl(path.join(runDir, "matches.jsonl"));
   info(`match ${runId}: ${seats[0].id} (${path.basename(opts.deckFiles[0])}) vs ${seats[1].id} (${path.basename(opts.deckFiles[1])}), ${opts.matches} × bo${ev.gamesPerMatch} (${Math.max(1, opts.parallel ?? ev.parallelMatches)} at a time), engine=${engine.name}`);
-  recorder.event("run_start", { headToHead: true, seats: opts.seats, decks: opts.deckFiles, provenance, cube: cube.name,
+  recorder.event("run_start", { headToHead: true, seats: opts.seats, decks: opts.deckFiles, provenance, configHash: configHash(cfg), cube: cube.name,
     anchors: anchorVersions(seats.map((s) => s.config), engine.name, cfg.engine.controller) });
 
   const parallel = Math.max(1, opts.parallel ?? ev.parallelMatches);

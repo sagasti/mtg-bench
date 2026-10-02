@@ -46,6 +46,12 @@ A seat drafts one deck per pod and plays every game of the pod with it, so its g
 - **Bootstrap.** With one pod the 95% CI resamples matches (a cluster is run + match id), which leaves out pod-to-pod variation; don't compare seats on a one-pod CI. With more than one pod (one run with `pods: N`, or several runs merged) it resamples pods with replacement, then matches within each drawn pod; a pod is run + pod index.
 - **Per-pod ratings.** report.md ("Ratings by pod") and summary.json (`podRatings`) fit each pod on its own and give each seat's SD between pods. For an all-bot line-up that SD is the noise floor: two seats closer than about two of it can't be told apart by one pod, and pooling N pods shrinks it by roughly √N. Size real events from it.
 
+## Pre-registration and exclusions
+
+- **Config hash.** `run_start.configHash` (also config.json, report.md "Versions") is the SHA-256 of the effective config with keys sorted: event, seats, pricing and engine settings, without machine-local paths (`outputDir`, `forgeRes`, `engine.forgeDir` / `forgeJar` / `bridgeJar` / `java` / `javaOpts`). `bench check <config>` prints it: publish it before the event, then `bench run <config> --expect-hash <hash>` (at least 8 hex digits) refuses to run anything else, `--pods` and `--engine` overrides included. A `--decks-from` / `--pools-from` source isn't in the hash; it is recorded in `run_start.source`.
+- **Exclusion rule.** A seat whose forfeits (harness and bridge) + fallbacks + API errors exceed `event.maxFailureRate` (default 0.05) of its decisions often didn't play as configured. report.md lists it under "Excluded from the leaderboard", apart from the ranked table, with its rating and failure counts kept; its games still count for its opponents. `report --max-failure-rate <x>` re-reports with another threshold. Over-budget seats (MB-011) usually land here, since their later draft picks are fallbacks.
+- **Censored matches** are a stated rule too (above): replayed once, then left out.
+
 ## Draws
 
 A game that reaches `maxGameTurns` ends as a draw ("Draw (turn cap of N turns)" on the bridge, `turn-cap` on the mock engine). Bradley-Terry scores a drawn game 0.5 for each seat at game level, and a match with equal game wins 0.5 at match level (`rate --level match`); a draw is evidence that the two seats are close, like any other result. Draws aren't dropped, because whether a seat lets games stall is part of its play. The Games section lists turn-cap draws per seat; a seat with many of them is being rated partly on stalled games.
@@ -64,7 +70,7 @@ The bots only pin the rating scale while they play the same way. A bot's play de
 
 A run without `run_end` in `events.jsonl`, or with a pod that has `pod_start` but no `pod_end`, stopped early: the report opens with **INCOMPLETE** and `summary.json` lists the reasons under `incomplete`.
 
-1. **Ratings**: Bradley-Terry fit over all games of uncensored matches, Elo scale, 95% bootstrap CI (resampling pods, then matches within them, when there is more than one pod; otherwise whole matches; a cluster is run + match id, so merged runs never share one). When bots played, an **Information asymmetry** note lists the computed hints bot seats get and LLM seats don't. With several pods, **Ratings by pod** follows: each pod's own fit and each seat's SD between pods. Replayed and censored matches per seat follow the table, then matches not played because a seat went over its budget (`maxSpendUsd` / `maxP95LatencySec`, docs/AGENTS.md; `seat_over_budget` in `events.jsonl`).
+1. **Ratings**: seats over the exclusion threshold are listed apart, under the ranked table (see "Pre-registration and exclusions"). Bradley-Terry fit over all games of uncensored matches, Elo scale, 95% bootstrap CI (resampling pods, then matches within them, when there is more than one pod; otherwise whole matches; a cluster is run + match id, so merged runs never share one). When bots played, an **Information asymmetry** note lists the computed hints bot seats get and LLM seats don't. With several pods, **Ratings by pod** follows: each pod's own fit and each seat's SD between pods. Replayed and censored matches per seat follow the table, then matches not played because a seat went over its budget (`maxSpendUsd` / `maxP95LatencySec`, docs/AGENTS.md; `seat_over_budget` in `events.jsonl`).
 2. **Token usage and cost by seat**: decisions, calls, each token type, tokens/decision, cost, p50/p95 decision latency. Tokens, calls and cost are summed from `usage.jsonl`, so the calls of a decision that ended in an infrastructure error (which has no decision row) still count; the report says how many such calls there were. Decision counts, validity and latency come from `decisions.jsonl`.
 3. **By seat × phase**: study / draft / deckbuild / game split of tokens and cost.
 4. **By decision kind**: average tokens, invalid answers and fallbacks per kind (e.g. are blockers expensive? do models flub targets?).
@@ -79,6 +85,7 @@ npm run bench -- report runs/<run>                     # rebuild report.md for a
 npm run bench -- report runs/a runs/b runs/c           # merged report across runs
 npm run bench -- report runs/a runs/b --allow-same-seed  # merge runs that drafted the same packs (not independent)
 npm run bench -- report runs/a runs/b --allow-anchor-changes  # merge runs whose bot anchors or cube differ (not one scale)
+npm run bench -- report runs/<run> --max-failure-rate 0.1   # exclusion threshold other than event.maxFailureRate
 npm run bench -- rate runs/a runs/b --level match      # ratings from match wins instead of games
 npm run bench -- rate runs/* --anchor random=1000      # pin a seat's rating
 ```
