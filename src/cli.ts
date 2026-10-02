@@ -15,6 +15,7 @@ import path from "node:path";
 import { summarize, renderReport } from "./analytics/report.ts";
 import { AnthropicProvider } from "./agents/providers/anthropic.ts";
 import { OpenAIProvider } from "./agents/providers/openai.ts";
+import { promptFile } from "./agents/render.ts";
 import { buildIndex, loadDb, saveIndex } from "./cards/db.ts";
 import { loadCube, parseCardList } from "./cards/cube.ts";
 import { loadConfig, missingKeys } from "./config.ts";
@@ -82,7 +83,7 @@ async function main() {
       if (rules) ok(`Comprehensive Rules loaded (${rules.size} entries)`);
       else if (cfg.event.knowledge.startsWith("oracle+tools")) problems.push("data/MagicCompRules.txt missing: search_rules will answer 'not available' (see data/README.md)");
       for (const f of ["system.md", "draft.md", "deckbuild.md", "game.md", `knowledge-${cfg.event.knowledge}.md`]) {
-        if (!fs.existsSync(path.resolve("prompts", cfg.event.promptVersion, f))) problems.push(`prompt file prompts/${cfg.event.promptVersion}/${f} missing`);
+        if (!fs.existsSync(promptFile(cfg.event.promptVersion, f))) problems.push(`prompt file prompts/${cfg.event.promptVersion}/${f} missing`);
       }
       console.log("Engine");
       if (cfg.engine.type === "forge") {
