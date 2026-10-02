@@ -168,6 +168,7 @@ config/                       smoke.mock.yaml, forge-bots.yaml, forge-1llm.yaml,
 ## 6. Decisions log (owner decisions, newest first)
 
 ### 2026-10-02
+- **The report states the bot-hint asymmetry** (MB-009): an "Information asymmetry" note under the ratings lists the computed tags rank-bot reads that LLM seats never see. A held-out cube is future work (§7), the cube being the owner's choice.
 - **Per-seat budgets stop the seat, not the run** (MB-011). `maxSpendUsd` (computed cost, needs `pricing`) and `maxP95LatencySec` (after 20 decisions) on a seat. Once over, the seat stays stopped (`seat_over_budget` event): its remaining matches are recorded as not played (no games, no result for either seat, no forfeit), and its draft picks and decks in later pods are rank-bot fallbacks. Checked before each match and each non-game decision, so a match in progress finishes. report.md lists matches not played per seat.
 - **Errored matches are replayed once before they're censored** (MB-006, MB-014). A match that errors for any reason but a harness bug (`errorKind` infra / timeout / bridge) is played again from scratch, same seats, decks and seed, at the end of its round (`<id>-replay`, `replayOf`); the replay stands in for it. Only a replay that errors too, or a harness bug, is censored. The match timeout is now `gamesPerMatch` × `engine.gameTimeoutSec` (default 60 min a game, 3 h for best-of-3) unless `matchTimeoutSec` is set; the configs drop their fixed 2 h.
 - **Anchors are versioned and never pooled across versions or cubes** (MB-002). Each bot seat records `run_start.anchors` (`rank-bot@human-v2`: provider, tag path `mock` / `human` / `ai`, policy version from `BOT_VERSIONS` in bots.ts). Bump the version when bots.ts's policy or the bridge's bot tags change. `report` / `rate` refuse runs whose anchors or cube differ (older runs count as `unrecorded`) unless `--allow-anchor-changes`. Current: random v1, rank-bot v2 (this week's targeting/delve/sorcery-speed changes), forge-ai v1.
@@ -203,6 +204,8 @@ config/                       smoke.mock.yaml, forge-bots.yaml, forge-1llm.yaml,
 - **Iterate gameplay with `bench match`** (fixed decks, no draft) on a cheap model: DeepSeek V4 Flash via OpenRouter, reasoning off, host pinned to one fp8 provider (Baidu). The report's reported-cost column is OpenRouter's actual charge.
 
 ## 7. Future work
+
+- **A held-out cube condition** (MB-009, MB-042; the owner's call which cube). Hiding the cube name buys little: models recognise well-known cubes from the card list (DeepSeek's Pauper-cube brief named its archetypes), so results on public cubes partly measure memorised cube knowledge. A held-out condition would use a cube no model can have seen: a fresh card mix (e.g. a random sample from a large card pool, or a private list) that keeps the same rules and the same anchors, reported separately from the public-cube results (anchor versions already refuse to pool across cubes).
 
 - **An anchor independent of harness tags** (MB-002). rank-bot reads tags the bridge computes, so its strength moves with the bridge (hence anchor versions). A steadier anchor: Forge's own drafting (`BoosterDraftAI`) plus Forge's AI in play, or fixed published decks piloted by Forge's AI.
 

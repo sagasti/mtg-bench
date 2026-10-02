@@ -12,7 +12,7 @@ One file per ticket. Status: open | in progress | done | dropped.
 | [MB-006](MB-006.md) | Errored and timed-out matches censor long games non-randomly | medium | done |
 | [MB-007](MB-007.md) | maxGameTurns isn't enforced on the default (human) bridge | medium | done |
 | [MB-008](MB-008.md) | Same seed means same packs: runs aren't independent replicates | medium | done |
-| [MB-009](MB-009.md) | Cube contamination; bot-only computed hints; coarse decision kinds on the human path | medium | in progress |
+| [MB-009](MB-009.md) | Cube contamination; bot-only computed hints; coarse decision kinds on the human path | medium | done |
 | [MB-010](MB-010.md) | No version provenance in run artifacts; bridge depends on Forge internals | medium | in progress |
 | [MB-011](MB-011.md) | Cost and wall-clock scale with the slowest, most expensive seat | medium | done |
 | [MB-012](MB-012.md) | Missing pieces for defensible published results | medium | open |

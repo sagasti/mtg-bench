@@ -262,6 +262,13 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
   L.push("", nPods > 1
     ? `The bootstrap resamples the ${nPods} pods, then matches within each drawn pod: a seat plays one deck for a whole pod, so pods are the replication unit.`
     : "One pod: the bootstrap resamples matches within it, so the CI leaves out pod-to-pod variation (the deck a seat drafted); see docs/ANALYTICS.md before comparing seats.", "");
+  if ([...s.bySeat.values()].some((a) => BOT_VERSIONS[a.provider])) {
+    // The tags src/agents/bots.ts reads: keep this list in step with it.
+    L.push("**Information asymmetry.** Bot seats get computed hints that LLM seats never see (by design: computed assessments stay out of prompts, HANDOFF §6 2026-10-01). "
+      + "rank-bot reads, per option: `type`, `cmc` and `sorcerySpeedOk` (priority), `keep` (mulligan), `toughness` and `evasive` (attackers), `attackerPower`, `blockerSurvives` and `killsAttacker` (blockers), `hostile` (targets); "
+      + "per question: `handLands` and `handSize` (mulligan), `opponentMaxUntappedPower` (attacks), `incomingLethal` (blocks). random reads none. "
+      + "forge-ai's games are played by Forge's own AI, which makes its own evaluations of the game. Read bot-vs-LLM ratings with this in mind.", "");
+  }
   if (nPods > 1) {
     L.push("### Ratings by pod", "", "Each pod fitted on its own. The SD across pods is how far a rating moves from one pod to the next; for identical bots it is the benchmark's noise floor.", "");
     L.push(`| Seat | ${s.byPod.pods.map((p) => podLabel(p, s.merged)).join(" | ")} | SD between pods |`, `|---|${s.byPod.pods.map(() => "---|").join("")}---|`);
