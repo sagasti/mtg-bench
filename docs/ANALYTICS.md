@@ -37,6 +37,8 @@ A seat with many censored matches is rated on a biased sample even so; fix the c
 
 ## report.md sections
 
+A run without `run_end` in `events.jsonl`, or with a pod that has `pod_start` but no `pod_end`, stopped early: the report opens with **INCOMPLETE** and `summary.json` lists the reasons under `incomplete`.
+
 1. **Ratings**: Bradley-Terry fit over all games of uncensored matches, Elo scale, 95% bootstrap CI (resampling whole matches; a cluster is run + match id, so merged runs never share one). Censored matches per seat follow the table.
 2. **Token usage and cost by seat**: decisions, calls, each token type, tokens/decision, cost, p50/p95 decision latency.
 3. **By seat × phase**: study / draft / deckbuild / game split of tokens and cost.

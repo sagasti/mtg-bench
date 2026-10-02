@@ -118,6 +118,8 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
     const rr = ev.format === "round-robin" ? roundRobin(n) : null;
     for (let round = 0; round < nRounds; round++) {
       const pairs = rr ? rr[round] : swissRound(n, points, played, round, prng.fork(`swiss${round}`));
+      const rematches = pairs.filter(([a, b]) => played.has(a < b ? `${a}-${b}` : `${b}-${a}`)).length;
+      if (rematches) info(`round ${round + 1}: no pairing without rematches; ${rematches} rematch(es)`);
       const results = await pool(pairs, ev.parallelMatches, async ([a, b]) => {
         const matchId = `p${pod}-r${round + 1}-${order[a].id}-vs-${order[b].id}`;
         let res: MatchResult;

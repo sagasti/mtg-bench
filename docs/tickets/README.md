@@ -30,6 +30,6 @@ One file per ticket. Status: open | in progress | done | dropped.
 | [MB-024](MB-024.md) | Re-using a --run-id appends to the existing run and corrupts it | high | done |
 | [MB-025](MB-025.md) | --pools-from accepts an incomplete draft log | medium | done |
 | [MB-026](MB-026.md) | Derived runs don't check the source matches the new config | medium | done |
-| [MB-027](MB-027.md) | Swiss pairing can dead-end and crash the event; crashed runs report as complete | medium | open |
+| [MB-027](MB-027.md) | Swiss pairing can dead-end and crash the event; crashed runs report as complete | medium | done |
 | [MB-028](MB-028.md) | --pools-from restores post-deckbuild notes before re-running deckbuild | low | done |
 | [MB-029](MB-029.md) | Loaded decks are never validated | low | done |

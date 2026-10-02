@@ -59,6 +59,15 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
     if (fs.existsSync(f)) Object.assign(pricing, { ...JSON.parse(fs.readFileSync(f, "utf8")).pricing, ...pricing });
   }
 
+  // A run that stopped early has no run_end, and a pod it was playing no pod_end.
+  const incomplete: string[] = [];
+  for (const d of runDirs) {
+    const events = readJsonl(path.join(d, "events.jsonl"));
+    if (!events.some((e) => e.type === "run_end")) incomplete.push(`${path.basename(d)}: no run_end`);
+    const ended = new Set(events.filter((e) => e.type === "pod_end").map((e) => e.pod));
+    for (const e of events) if (e.type === "pod_start" && !ended.has(e.pod)) incomplete.push(`${path.basename(d)}: pod ${e.pod} has no pod_end`);
+  }
+
   const bySeat = new Map<string, Agg & { model: string; provider: string }>();
   const bySeatPhase = new Map<string, Agg>();
   const byKind = new Map<string, Agg>();
@@ -136,12 +145,13 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
     for (const e of m.engineErrors ?? []) add(engineErrors, `${e.kind} at ${e.at || "?"}`);
   }
 
-  return { decisions, calls, matches, bySeat, bySeatPhase, byKind, ratings, censored, games, reasons, delegated, forfeited, provenance, engineErrors, matchesWithEngineErrors, playWinRate: decided.length ? playWins / decided.length : null, pricing };
+  return { incomplete, decisions, calls, matches, bySeat, bySeatPhase, byKind, ratings, censored, games, reasons, delegated, forfeited, provenance, engineErrors, matchesWithEngineErrors, playWinRate: decided.length ? playWins / decided.length : null, pricing };
 }
 
 export function renderReport(s: ReturnType<typeof summarize>, title: string): string {
   const L: string[] = [];
   L.push(`# ${title}`, "");
+  if (s.incomplete.length) L.push(`**INCOMPLETE**: the run stopped before it finished (${s.incomplete.join("; ")}). Standings and ratings cover only the matches that were played.`, "");
   L.push(`Matches: ${s.matches.length} · Games: ${s.games.length} · Decisions: ${s.decisions.length} · Model calls: ${s.calls.length}`, "");
 
   L.push("## Ratings (Bradley-Terry, game level, Elo scale, 95% bootstrap CI)", "");
@@ -278,6 +288,7 @@ export function writeReport(runDir: string, cfg?: BenchConfig) {
   const s = summarize([runDir], cfg);
   fs.writeFileSync(path.join(runDir, "report.md"), renderReport(s, `Run ${path.basename(runDir)}`));
   const json = {
+    incomplete: s.incomplete.length ? s.incomplete : undefined,
     ratings: s.ratings,
     censored: Object.fromEntries(s.censored),
     seats: Object.fromEntries([...s.bySeat.entries()].map(([id, a]) => [id, { ...a, latencies: undefined, p50LatencyMs: pct(a.latencies, 0.5), p95LatencyMs: pct(a.latencies, 0.95) }])),
