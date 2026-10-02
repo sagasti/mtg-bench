@@ -27,6 +27,7 @@ import forge.game.zone.ZoneType;
 import forge.gamemodes.match.input.Input;
 import forge.gamemodes.match.input.InputAttack;
 import forge.gamemodes.match.input.InputBlock;
+import forge.gamemodes.match.input.InputConfirm;
 import forge.gamemodes.match.input.InputConfirmMulligan;
 import forge.gamemodes.match.input.InputLockUI;
 import forge.gamemodes.match.input.InputLondonMulligan;
@@ -36,6 +37,7 @@ import forge.gamemodes.match.input.InputSelectEntitiesFromList;
 import forge.gamemodes.match.input.InputSelectManyBase;
 import forge.gamemodes.match.input.InputSelectTargets;
 import forge.player.PlayerControllerHuman;
+import forge.util.Localizer;
 
 /**
  * Plays Forge's interactive inputs for an agent, generically: every input exposes what clicking a card would do
@@ -54,6 +56,8 @@ final class InputDriver implements Observer, Runnable {
     /** Cards whose cast just failed with the game state unchanged: withheld from priority until the state changes. */
     private final java.util.Set<Integer> withheld = new java.util.HashSet<>();
     private String withheldKey = "";
+    /** Cards the affordability filter kept off a priority question, by "turn:card" (each counted once per turn). */
+    private final java.util.Set<String> filtered = new java.util.HashSet<>();
     private Integer lastPriorityCard = null;
     private String lastPriorityKey = "";
     private static final int MAX_CLICKS_PER_INPUT = 120;
@@ -92,22 +96,36 @@ final class InputDriver implements Observer, Runnable {
         }
     }
 
+    /** Consecutive exceptions while driving the same input; a repeatable one would otherwise re-drive it forever. */
+    private Input failedInput = null;
+    private int failures = 0;
+    private static final int MAX_FAILURES_PER_INPUT = 3;
+
     @Override
     public void run() {
         while (true) {
+            Input in = null;
             try {
-                Input in = pending.poll(1, TimeUnit.SECONDS);
+                in = pending.poll(1, TimeUnit.SECONDS);
                 if (in == null) {
                     // Never leave an open input unattended: pick it up again if no event announced it.
                     Input open = ctl.getInputQueue().getInput();
                     if (open != null && !(open instanceof InputLockUI) && !ch.player.getGame().isGameOver()) in = open;
                 }
-                if (in != null) drive(in);
+                if (in != null) { drive(in); failedInput = null; failures = 0; }
             } catch (InterruptedException e) {
                 return;
             } catch (Throwable t) {
                 t.printStackTrace();
                 ch.client.error("input driver: " + t);
+                failures = in != null && in == failedInput ? failures + 1 : 1;
+                failedInput = in;
+                if (failures >= MAX_FAILURES_PER_INPUT) {
+                    // Never loop silently: the same input failing again and again ends the match as an error.
+                    ch.client.error("input driver: " + failures + " consecutive failures on " + (in != null ? in.getClass().getSimpleName() : "?") + "; aborting");
+                    dumpThreads();
+                    System.exit(3);
+                }
             }
         }
     }
@@ -136,18 +154,29 @@ final class InputDriver implements Observer, Runnable {
     private int click = 0;
     /** Clicks chosen in one decision but performed one per step (mana sources: each activation must finish first). */
     private final java.util.ArrayDeque<String> queued = new java.util.ArrayDeque<>();
-    /** Attack/block declarations tried on the current input; Forge rejects illegal ones and the input stays open. */
+    /**
+     * Attack/block declarations tried in the current combat step. Counted per turn and step, not per input: Forge
+     * answers a rejected attack with a fresh InputAttack on the same combat.
+     */
     private int declarations = 0;
+    private String declarationKey = "";
     /** Batched selections tried on the current input (targets, card lists, mana). */
     private int batches = 0;
+    /** Single-click questions asked on the current input. */
+    private int asks = 0;
 
     private void drive(Input in) throws Exception {
         trace("drive " + in.getClass().getSimpleName());
         lastChoice = null;
         repeats = 0;
         queued.clear();
-        declarations = 0;
+        Game g = ch.player.getGame();
+        String key = in instanceof InputAttack || in instanceof InputBlock
+                ? g.getPhaseHandler().getTurn() + ":" + g.getPhaseHandler().getPhase() + ":" + in.getClass().getSimpleName() + ":" + System.identityHashCode(g.getCombat()) : "";
+        if (key.isEmpty() || !key.equals(declarationKey)) declarations = 0;
+        declarationKey = key;
         batches = 0;
+        asks = 0;
         for (click = 0; click < MAX_CLICKS_PER_INPUT && current(in); click++) {
             awaitMessage(in);
             // Forge activates a mana source asynchronously (on a game executor thread); wait for it like a human would
@@ -182,8 +211,36 @@ final class InputDriver implements Observer, Runnable {
         }
     }
 
-    /** min/max of an InputSelectManyBase (protected fields), or null. */
-    private static int[] ownBounds(Input in) {
+    /**
+     * The input's own min/max, or null: an InputSelectManyBase's fields; for targets, the ability's (or the input's
+     * fixed numTargets) less the targets already chosen; for the London mulligan, the cards still to put on the bottom.
+     * (setSelectables can't be relied on: InputSelectTargets calls it in its constructor, before the input is queued.)
+     */
+    private int[] ownBounds(Input in) {
+        if (in instanceof InputSelectTargets) {
+            SpellAbility sa = targetingAbility(in);
+            if (sa == null) return null;
+            try {
+                java.lang.reflect.Field fn = InputSelectTargets.class.getDeclaredField("numTargets");
+                fn.setAccessible(true);
+                Integer num = (Integer) fn.get(in);
+                int chosen = sa.getTargets().size();
+                int lo = num != null ? num : sa.getMinTargets(), hi = num != null ? num : sa.getMaxTargets();
+                return new int[] { Math.max(0, lo - chosen), Math.max(0, hi - chosen) };
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                return null;
+            }
+        }
+        if (in instanceof InputLondonMulligan) {
+            try {
+                java.lang.reflect.Field f = InputLondonMulligan.class.getDeclaredField("toReturn");
+                f.setAccessible(true);
+                int n = f.getInt(in);
+                return new int[] { n, n };
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                return null;
+            }
+        }
         if (!(in instanceof InputSelectManyBase)) return null;
         try {
             java.lang.reflect.Field fmin = InputSelectManyBase.class.getDeclaredField("min");
@@ -204,6 +261,29 @@ final class InputDriver implements Observer, Runnable {
             f.setAccessible(true);
             Object v = f.get(in);
             return v instanceof java.util.Collection<?> c ? c : null;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** The spell or ability a targeting input chooses targets for (reflection: private field), or null. */
+    private static SpellAbility targetingAbility(Input in) {
+        if (!(in instanceof InputSelectTargets)) return null;
+        try {
+            java.lang.reflect.Field f = InputSelectTargets.class.getDeclaredField("sa");
+            f.setAccessible(true);
+            return f.get(in) instanceof SpellAbility sa ? sa : null;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** Cards already chosen for the bottom in a London mulligan (reflection: private field). */
+    private static java.util.Collection<?> londonSelected(Input in) {
+        try {
+            java.lang.reflect.Field f = InputLondonMulligan.class.getDeclaredField("selected");
+            f.setAccessible(true);
+            return f.get(in) instanceof java.util.Collection<?> c ? c : null;
         } catch (ReflectiveOperationException | RuntimeException e) {
             return null;
         }
@@ -266,13 +346,38 @@ final class InputDriver implements Observer, Runnable {
             if (!next.equals("ok") || gui.okEnabled) click(next, game);
             return true;
         }
+        Localizer loc = Localizer.getInstance();
         if (in instanceof InputPassPriority) {
+            if (gui.okLabel.equals(loc.getMessage("lblAccept")) && gui.cancelLabel.equals(loc.getMessage("lblDecline"))) {
+                // Forge's yield suggestion ("pass until ..."): accepting would skip later priority without asking.
+                ch.auto("policy", "priority", "Forge's auto-yield suggestion declined");
+                click("cancel", game);
+                return true;
+            }
             // A cast that failed (cancelled, unpayable) leaves the state unchanged: don't offer it again until it changes.
             String key = stateKey(game);
             if (!key.equals(withheldKey)) { withheld.clear(); withheldKey = key; }
+            if (filtered.size() > 1000) filtered.clear();
             if (lastPriorityCard != null && key.equals(lastPriorityKey) && withheld.add(lastPriorityCard))
                 ch.auto("policy", "priority", "card withheld: its cast just failed and the state is unchanged");
             lastPriorityCard = null;
+        }
+        if (in instanceof InputConfirm && gui.cancelLabel.equals(loc.getMessage("lblEndTurn"))) {
+            // An opponent's revealed hand: OK acknowledges it, "End Turn" would skip the rest of the turn. The cards go to
+            // the agent as information with its next decision (AgentGuiGame.showRevealedCards).
+            ch.auto("forced", "reveal", "revealed cards acknowledged");
+            click("ok", game);
+            return true;
+        }
+        if (in instanceof InputAttack && game.getCombat() != null) {
+            // Every ask is a clean "choose the set": undo this seat's earlier declarations (a rejected attack comes back
+            // as a new input with them still declared, and clicking one again would remove it).
+            Combat combat = game.getCombat();
+            for (Card c : new ArrayList<>(combat.getAttackers())) if (c.getController().equals(ch.player)) combat.removeFromCombat(c);
+        }
+        if (in instanceof InputBlock && game.getCombat() != null) {
+            // Same for blocks: a creature already blocking can't be offered again, so a retry could only add blocks.
+            for (Card c : ch.player.getCreaturesInPlay()) if (game.getCombat().isBlocking(c)) game.getCombat().undoBlockingAssignment(c);
         }
 
         List<PlayerControllerExternal.Opt> opts = new ArrayList<>();
@@ -292,11 +397,22 @@ final class InputDriver implements Observer, Runnable {
             cards.clear();
             for (Object o : listChoices) if (o instanceof Card lc) cards.add(lc);
         }
+        if (in instanceof InputLondonMulligan) {
+            // Forge's input offers no card actions (a human clicks the hand); the hand is the choice.
+            cards.clear();
+            cards.addAll(ch.player.getCardsIn(ZoneType.Hand));
+        }
         for (Card c : cards) {
             String act;
-            try { act = listChoices != null ? "select card" : in.getActivateAction(c); } catch (RuntimeException e) { act = null; }
+            try { act = listChoices != null || in instanceof InputLondonMulligan ? "select card" : in.getActivateAction(c); } catch (RuntimeException e) { act = null; }
             if (act == null) continue;
-            if (in instanceof InputPassPriority && !playableNow(c)) continue; // offered by the human UI even when unaffordable
+            if (in instanceof InputPassPriority && !playableNow(c)) {
+                // Offered by the human UI even when unaffordable; counted once per card and turn, so the filter's
+                // reach (and any false negatives) is visible in the report.
+                if (filtered.add(game.getPhaseHandler().getTurn() + ":" + c.getId()))
+                    ch.auto("policy", "priority", "card not offered: the affordability probe says its cost can't be paid now");
+                continue;
+            }
             if (in instanceof InputPassPriority && withheld.contains(c.getId())) continue;
             String who = c.getController().equals(ch.player) ? "your " : "opponent's ";
             String zone = c.getZone() != null && c.getZone().getZoneType() != ZoneType.Battlefield ? " [" + c.getZone().getZoneType() + "]" : "";
@@ -310,9 +426,14 @@ final class InputDriver implements Observer, Runnable {
                 opts.add(new PlayerControllerExternal.Opt("player:" + p.getId(), "Select player: " + (p.equals(ch.player) ? "you" : "opponent"), null, meta));
             }
         }
+        // Buttons. OK is the null action ("pass") only where it means pass or keep; Cancel only while casting (it rolls
+        // the cast back). Helper buttons that hand the turn or a choice to Forge are never offered: "End Turn" / "Undo"
+        // at priority (Forge would then pass every priority this turn without asking), "Auto" on the London mulligan, "Alpha Strike" / "Call Back" when attacking.
         boolean castingStep = in instanceof InputSelectTargets || in instanceof InputPayMana;
-        if (gui.okEnabled) opts.add(new PlayerControllerExternal.Opt("ok", "Button: " + gui.okLabel, null, castingStep ? null : passMeta()));
-        if (gui.cancelEnabled) opts.add(new PlayerControllerExternal.Opt("cancel", "Button: " + gui.cancelLabel, null, castingStep ? passMeta() : null));
+        boolean okIsPass = in instanceof InputPassPriority || in instanceof InputConfirmMulligan;
+        boolean helperCancel = in instanceof InputPassPriority || in instanceof InputLondonMulligan || in instanceof InputAttack;
+        if (gui.okEnabled) opts.add(new PlayerControllerExternal.Opt("ok", "Button: " + gui.okLabel, null, okIsPass ? passMeta() : null));
+        if (gui.cancelEnabled && !helperCancel) opts.add(new PlayerControllerExternal.Opt("cancel", "Button: " + gui.cancelLabel, null, castingStep ? passMeta() : null));
         if (opts.isEmpty()) {
             if (click == 5) ch.client.error("input driver: nothing to offer on " + in.getClass().getSimpleName() + "; prompt=" + StateView.clean(gui.prompt).replace('\n', ' ') + " choices=" + validChoices(in));
             return true; // nothing selectable yet: the driver loop waits and retries
@@ -341,43 +462,48 @@ final class InputDriver implements Observer, Runnable {
         gui.lastError = null;
         String prompt = StateView.clean(gui.prompt) + (err != null ? "\n(Forge rejected your last choice: " + StateView.clean(err) + ")" : "");
 
-        // Attacks and mana payment are one decision each: choose every attacker / every source at once; the
-        // driver clicks them in order (then confirms the attack). Everything else is one click per decision.
+        // Attacks and blocks are one decision each: the whole set at once. The driver clicks it, then checks it with
+        // Forge's own validation before confirming, so a rejection comes back to the agent at once, with the reason.
         if ((in instanceof InputAttack || in instanceof InputBlock) && game.getCombat() != null && ++declarations > ch.ctx.maxRetries + 1) {
             // Forge kept rejecting the agent's declarations (menace, "must attack/block" requirements...).
             // First the null action (no attack / no blocks, counted as a forfeit); if even that is illegal, Forge's AI
-            // declares a legal set (counted as delegated). Both are reported.
+            // declares a legal set (counted as delegated). Both are reported. The seat's declarations were undone above.
             Combat combat = game.getCombat();
-            String what = in instanceof InputAttack ? "attackers" : "blockers";
-            if (declarations == ch.ctx.maxRetries + 2) {
-                if (in instanceof InputAttack) { for (Card c : new ArrayList<>(combat.getAttackers())) if (c.getController().equals(ch.player)) combat.removeFromCombat(c); }
-                else for (Card c : ch.player.getCreaturesInPlay()) if (combat.isBlocking(c)) combat.removeFromCombat(c);
-                ch.forfeited(what, "declaration rejected " + (ch.ctx.maxRetries + 1) + " times; null action: " + (in instanceof InputAttack ? "no attack" : "no blocks"));
+            boolean attack = in instanceof InputAttack;
+            String what = attack ? "attackers" : "blockers";
+            if (attack ? CombatUtil.validateAttackers(combat) : CombatUtil.validateBlocks(combat, ch.player) == null) {
+                ch.forfeited(what, "declaration rejected " + (ch.ctx.maxRetries + 1) + " times; null action: " + (attack ? "no attack" : "no blocks"));
             } else {
-                if (in instanceof InputAttack) new AiAttackController(ch.player).declareAttackers(combat);
+                if (attack) new AiAttackController(ch.player).declareAttackers(combat);
                 else new AiBlockController(ch.player, false).assignBlockersForCombat(combat);
                 ch.delegated(what, "declaration rejected and the null action is illegal (a requirement applies); Forge's AI declared");
             }
             click("ok", game);
-            if (current(in) && declarations > ch.ctx.maxRetries + 3)
-                ch.client.error("input driver: " + what + " still open after the AI's declaration; lastError=" + gui.lastError);
+            if (current(in) && declarations > ch.ctx.maxRetries + 2)
+                ch.client.error("input driver: " + what + " still open after the null action / the AI's declaration; lastError=" + gui.lastError);
             return true;
         }
-        if (in instanceof InputAttack) {
+        if (in instanceof InputAttack && game.getCombat() != null) {
+            Combat combat = game.getCombat();
             List<PlayerControllerExternal.Opt> attackers = new ArrayList<>();
             for (PlayerControllerExternal.Opt o : opts) if (o.id.matches("c\\d+")) attackers.add(o);
             JsonObject hints = new JsonObject();
             int oppMaxPower = 0;
             for (Player o : ch.player.getOpponents()) for (Card b : o.getCreaturesInPlay()) if (!b.isTapped()) oppMaxPower = Math.max(oppMaxPower, b.getNetPower());
             hints.addProperty("opponentMaxUntappedPower", oppMaxPower);
+            ch.attempt = declarations - 1;
             List<String> r = ch.ask("attackers", prompt + "\nChoose all your attacking creatures at once (none = no attack).", attackers, 0, attackers.size(), hints);
             for (String id : r == null ? List.<String>of() : r) { final String pick = id; click(pick, game); }
+            String why = gui.lastError;
+            if (why == null && !CombatUtil.validateAttackers(combat))
+                why = "that attack breaks a requirement or restriction (for example a creature that must attack, or one that can't attack alone)";
+            if (why != null) { gui.lastError = why; return true; } // asked again (the input stays open), within the budget above
             if (current(in)) click("ok", game);
             return true;
         }
         if (in instanceof InputBlock && game.getCombat() != null) {
             // One decision: every "blocker blocks attacker" pair at once; the driver clicks attacker then blocker
-            // for each pair, then confirms. Forge validates the blocks (menace, requirements) as for a human.
+            // for each pair, then confirms.
             Combat combat = game.getCombat();
             List<PlayerControllerExternal.Opt> pairs = new ArrayList<>();
             java.util.Map<String, Card[]> byId = new java.util.HashMap<>();
@@ -400,7 +526,8 @@ final class InputDriver implements Observer, Runnable {
             if (pairs.isEmpty()) { ch.auto("forced", "blockers", "no creature can block"); click("ok", game); return true; }
             JsonObject hints = new JsonObject();
             hints.addProperty("incomingLethal", incoming >= ch.player.getLife());
-            trace("blocks: pairs=" + pairs.size() + " lastError=" + gui.lastError);
+            trace("blocks: pairs=" + pairs.size() + " lastError=" + err);
+            ch.attempt = declarations - 1;
             List<String> r = ch.ask("blockers", prompt + "\nChoose all your blocks at once: each of your creatures blocks at most one attacker; several may block the same attacker. None = no blocks.",
                     pairs, 0, ch.player.getCreaturesInPlay().size(), hints);
             for (String id : r == null ? List.<String>of() : r) {
@@ -409,52 +536,52 @@ final class InputDriver implements Observer, Runnable {
                 click(StateView.id(ba[1]), game); // choose the attacker
                 click(StateView.id(ba[0]), game); // then the blocker
             }
+            String why = gui.lastError;
+            if (why == null) why = CombatUtil.validateBlocks(combat, ch.player); // what InputBlock.onOk would reject, but asynchronously
+            if (why != null) { gui.lastError = why; return true; } // asked again (the input stays open), within the budget above
             if (current(in)) click("ok", game);
             return true;
         }
-        if (in instanceof InputSelectTargets || in instanceof InputSelectManyBase) {
-            // One decision: all the targets / cards at once, within Forge's own min/max, then OK. A forfeit or no
-            // answer presses the null button (Cancel during a cast, which rolls it back).
+        if (in instanceof InputSelectTargets || in instanceof InputSelectManyBase || in instanceof InputLondonMulligan) {
+            // One decision: all the targets / cards at once, within Forge's own min/max, then OK. A forfeit presses the
+            // null button if there is one (Cancel during a cast, which rolls it back), else applies the harness's
+            // null action (the first legal choices) like any answer.
             List<PlayerControllerExternal.Opt> picks = new ArrayList<>();
             for (PlayerControllerExternal.Opt o : opts) if (!o.id.equals("ok") && !o.id.equals("cancel")) picks.add(o);
-            // Bounds: the input's own min/max for list selections (not every one announces them), else setSelectables'.
             int[] own = ownBounds(in);
             int max = Math.max(1, Math.min(own != null ? own[1] : gui.selMax, picks.size()));
             int min = Math.max(0, Math.min(own != null ? own[0] : gui.selMin, max));
-            if (picks.isEmpty()) { click(gui.okEnabled ? "ok" : "cancel", game); return true; }
+            boolean cancel = gui.cancelEnabled && !helperCancel;
+            if (picks.isEmpty()) {
+                if (gui.okEnabled || cancel) click(gui.okEnabled ? "ok" : "cancel", game);
+                return true;
+            }
             if (++batches > ch.ctx.maxRetries + 1) {
                 // The agent's selections never completed this step: forfeit with the null action, i.e. the null button
                 // if there is one, else the first legal choices in engine order.
-                if (gui.cancelEnabled || gui.okEnabled) {
-                    ch.forfeited(kindOf(in), "selection didn't complete the step in " + (ch.ctx.maxRetries + 1) + " tries; pressed " + (gui.cancelEnabled ? gui.cancelLabel : gui.okLabel));
-                    click(gui.cancelEnabled ? "cancel" : "ok", game);
+                if (cancel || gui.okEnabled) {
+                    ch.forfeited(kindOf(in), "selection didn't complete the step in " + (ch.ctx.maxRetries + 1) + " tries; pressed " + (cancel ? gui.cancelLabel : gui.okLabel));
+                    click(cancel ? "cancel" : "ok", game);
                 } else if (batches == ch.ctx.maxRetries + 2) {
                     ch.forfeited(kindOf(in), "selection didn't complete the step in " + (ch.ctx.maxRetries + 1) + " tries; first legal choices");
-                    java.util.Collection<?> already = entityList(in, "selected");
-                    java.util.Set<String> have = new java.util.HashSet<>();
-                    if (already != null) for (Object o : already) have.add(o instanceof Card ac ? StateView.id(ac) : o instanceof Player ap ? "player:" + ap.getId() : "");
-                    java.util.Set<String> want = new java.util.HashSet<>();
-                    for (int i = 0; i < Math.max(1, min) && i < picks.size(); i++) want.add(picks.get(i).id);
-                    for (String id : have) if (!want.contains(id) && !id.isEmpty()) queued.add(id);
-                    for (String id : want) if (!have.contains(id)) queued.add(id);
-                    queued.add("ok");
+                    List<String> first = new ArrayList<>();
+                    for (int i = 0; i < Math.max(1, min) && i < picks.size(); i++) first.add(picks.get(i).id);
+                    select(in, first);
                 } else {
                     ch.client.error("input driver: " + in.getClass().getSimpleName() + " still open after the null action; prompt=" + StateView.clean(gui.prompt).replace('\n', ' '));
                 }
                 return true;
             }
-            List<String> r = ch.ask(kindOf(in), prompt + "\nChoose " + (min == max ? String.valueOf(min) : min + " to " + max) + " at once.", picks, min, max, null);
-            if (r == null || ch.lastAnswerForfeit) {
-                click(gui.cancelEnabled ? "cancel" : "ok", game);
+            String cast = castingContext(in);
+            ch.attempt = batches - 1;
+            List<String> r = ch.ask(kindOf(in), (cast != null ? cast + "\n" : "") + prompt + "\nChoose " + (min == max ? String.valueOf(min) : min + " to " + max) + " at once.", picks, min, max, null);
+            if (ch.lastAnswerForfeit && cancel) { click("cancel", game); return true; }
+            if (r == null) {
+                // No usable answer (the harness always sends one; defensive): the null button, else ask again.
+                if (cancel || gui.okEnabled) click(cancel ? "cancel" : "ok", game);
                 return true;
             }
-            // Clicking toggles a selection, so click only the differences from what is already selected.
-            java.util.Collection<?> already = entityList(in, "selected");
-            java.util.Set<String> want = new java.util.HashSet<>(r), have = new java.util.HashSet<>();
-            if (already != null) for (Object o : already) have.add(o instanceof Card ac ? StateView.id(ac) : o instanceof Player ap ? "player:" + ap.getId() : "");
-            for (String id : have) if (!want.contains(id) && !id.isEmpty()) queued.add(id);   // deselect
-            for (String id : r) if (!have.contains(id)) queued.add(id);                     // select
-            queued.add("ok"); // confirm once the picks are made (ignored if the input already finished)
+            select(in, r);
             return true;
         }
         if (in instanceof InputPayMana) {
@@ -469,13 +596,14 @@ final class InputDriver implements Observer, Runnable {
             }
             int need = remainingMana(in);
             // Forge enables Auto only when the cost can be paid. Unpayable: cancel (the cast rolls back).
-            // Every legal payment taps the same kind of source: let Auto pay. Otherwise the agent picks the sources.
+            // Every legal payment taps the same kind of source: let Auto pay (unless manaPayment: always). Otherwise the
+            // agent picks the sources.
             if (!gui.okEnabled) {
-                ch.auto("forced", "mana_payment", "cost can't be paid: cast cancelled");
-                click(gui.cancelEnabled ? "cancel" : "ok", game);
+                ch.auto("forced", "mana_payment", "pay_or_else".equals(ch.kindHint) ? "cost can't be paid: payment declined" : "cost can't be paid: cast cancelled");
+                if (gui.cancelEnabled) click("cancel", game);
                 return true;
             }
-            if (sources.size() <= need || (kinds.size() <= 1 && interchangeable)) {
+            if (sources.size() <= need || (!ch.ctx.alwaysAskMana && kinds.size() <= 1 && interchangeable)) {
                 if (sources.size() <= need) ch.auto("forced", "mana_payment", "exactly enough sources");
                 else ch.auto("policy", "mana_payment", "interchangeable sources: same-name lands, nothing attached, no counters (Forge's Auto pays)");
                 click("ok", game);
@@ -486,28 +614,83 @@ final class InputDriver implements Observer, Runnable {
                 click(gui.cancelEnabled ? "cancel" : "ok", game);
                 return true;
             }
+            ch.attempt = batches - 1;
             List<String> r = ch.ask("mana_payment", prompt + "\nChoose the mana sources to tap for this cost: " + need
                     + " mana in total, so pick at least " + need + " source(s).", sources, Math.min(need, sources.size()), sources.size(), null);
             if (r != null) queued.addAll(r); // clicked one per step, each after the previous activation finishes
             return true;
         }
+        if (in instanceof InputConfirmMulligan) {
+            // Keep (OK) or mulligan (Cancel), with the tags rank-bot reads.
+            List<PlayerControllerExternal.Opt> two = new ArrayList<>();
+            JsonObject keep = passMeta(), mull = new JsonObject();
+            keep.addProperty("keep", true);
+            mull.addProperty("keep", false);
+            two.add(new PlayerControllerExternal.Opt("ok", "Button: " + gui.okLabel, null, keep));
+            two.add(new PlayerControllerExternal.Opt("cancel", "Button: " + gui.cancelLabel, null, mull));
+            int lands = 0;
+            for (Card c : ch.player.getCardsIn(ZoneType.Hand)) if (c.isLand()) lands++;
+            JsonObject hints = new JsonObject();
+            hints.addProperty("handLands", lands);
+            hints.addProperty("handSize", ch.player.getCardsIn(ZoneType.Hand).size() - ch.player.getStats().getMulliganCount());
+            List<String> r = ch.ask("mulligan", prompt, two, 1, 1, hints);
+            click(r == null || r.isEmpty() ? "ok" : r.get(0), game);
+            return true;
+        }
+        if (in instanceof InputConfirm) {
+            // A two-button question. Yes/No answers with ids "yes"/"no" (the harness's null action declines); play/draw
+            // with "play"/"draw".
+            String kind = kindOf(in);
+            boolean yesNo = AgentGuiGame.isYesNo(List.of(gui.okLabel, gui.cancelLabel));
+            String yes = kind.equals("play_draw") ? "play" : yesNo ? "yes" : "ok", no = kind.equals("play_draw") ? "draw" : yesNo ? "no" : "cancel";
+            List<PlayerControllerExternal.Opt> two = new ArrayList<>();
+            if (gui.okEnabled) two.add(new PlayerControllerExternal.Opt(yes, "Button: " + gui.okLabel, null));
+            if (gui.cancelEnabled) two.add(new PlayerControllerExternal.Opt(no, "Button: " + gui.cancelLabel, null));
+            List<String> r = ch.ask(kind, prompt, two, 1, 1, null);
+            String pick = r == null || r.isEmpty() ? (gui.cancelEnabled ? no : yes) : r.get(0);
+            click(pick.equals(yes) ? "ok" : "cancel", game);
+            return true;
+        }
 
+        ch.attempt = asks++; // the same input still open after a click: a re-ask of this step
         List<String> r = ch.ask(kindOf(in), prompt, opts, 1, 1, null);
         trace("asked " + kindOf(in) + " opts=" + opts.size() + " -> " + r);
-        String choice = r == null || r.isEmpty() ? (gui.cancelEnabled ? "cancel" : gui.okEnabled ? "ok" : null) : r.get(0);
+        String choice = r == null || r.isEmpty() ? (gui.cancelEnabled && !helperCancel ? "cancel" : gui.okEnabled ? "ok" : null) : r.get(0);
         if (choice == null) return false;
 
         // A click that changes nothing, repeated past the retry budget, is a forfeit: take the null button.
         repeats = choice.equals(lastChoice) ? repeats + 1 : 0;
         lastChoice = choice;
         if (repeats > ch.ctx.maxRetries && !choice.equals("ok") && !choice.equals("cancel")) {
-            ch.forfeited(kindOf(in), "same click " + (repeats) + " times without effect; pressed " + (gui.cancelEnabled ? gui.cancelLabel : gui.okLabel));
-            choice = gui.cancelEnabled ? "cancel" : "ok";
+            String button = gui.cancelEnabled && !helperCancel ? "cancel" : gui.okEnabled ? "ok" : null;
+            if (button != null) {
+                ch.forfeited(kindOf(in), "same click " + (repeats) + " times without effect; pressed " + (button.equals("cancel") ? gui.cancelLabel : gui.okLabel));
+                choice = button;
+            }
         }
         final String pick = choice;
         if (in instanceof InputPassPriority && pick.matches("c\\d+")) { lastPriorityCard = Integer.parseInt(pick.substring(1)); lastPriorityKey = stateKey(game); }
         click(pick, game);
         return true;
+    }
+
+    /** Click a selection: toggle only the differences from what is already selected, then OK once it is enabled. */
+    private void select(Input in, List<String> picks) {
+        java.util.Collection<?> already = in instanceof InputLondonMulligan ? londonSelected(in) : entityList(in, "selected");
+        java.util.Set<String> want = new java.util.HashSet<>(picks), have = new java.util.HashSet<>();
+        if (already != null) for (Object o : already) have.add(o instanceof Card ac ? StateView.id(ac) : o instanceof Player ap ? "player:" + ap.getId() : "");
+        for (String id : have) if (!want.contains(id) && !id.isEmpty()) queued.add(id);   // deselect
+        for (String id : picks) if (!have.contains(id)) queued.add(id);                  // select
+        queued.add("ok"); // confirm once the picks are made (skipped while OK is disabled; ignored if the input already finished)
+    }
+
+    /** "You are casting X" for a targeting prompt (Forge's own text names the card but not whose spell it is). */
+    private String castingContext(Input in) {
+        SpellAbility sa = targetingAbility(in);
+        if (sa == null || sa.getHostCard() == null) return null;
+        boolean mine = ch.player.equals(sa.getActivatingPlayer());
+        String what = sa.isSpell() ? "casting" : sa.isTrigger() ? "putting a triggered ability on the stack from" : "activating an ability of";
+        return (mine ? "You are " : "Your opponent is ") + what + " " + sa.getHostCard().getName() + "; choose its targets.";
     }
 
     /** Whether a player is actually among this input's valid choices (reflection: the fields are private). */
@@ -538,11 +721,15 @@ final class InputDriver implements Observer, Runnable {
             boolean land = c.isLand() && c.isInZone(ZoneType.Hand);
             m.addProperty("type", land ? "land" : c.isInZone(ZoneType.Battlefield) ? "ability" : "spell");
             m.addProperty("cmc", c.getCMC());
+            // A sorcery could be cast now: the seat's own main phase with an empty stack.
+            Game g = ch.player.getGame();
+            m.addProperty("sorcerySpeedOk", g.getPhaseHandler().isPlayerTurn(ch.player) && g.getPhaseHandler().getPhase() != null
+                    && g.getPhaseHandler().getPhase().isMain() && g.getStack().isEmpty());
         } else if (in instanceof InputAttack) {
             m.addProperty("power", c.getNetPower());
             m.addProperty("toughness", c.getNetToughness());
             m.addProperty("evasive", c.hasKeyword("Flying"));
-        } else if (in instanceof InputSelectTargets) {
+        } else if (in instanceof InputSelectTargets || in instanceof InputSelectManyBase) {
             m.addProperty("hostile", !c.getController().equals(ch.player));
         }
         return m;
@@ -551,18 +738,36 @@ final class InputDriver implements Observer, Runnable {
     /** Something on this card can be done right now: a land drop, or a non-mana ability that is playable and affordable. */
     private boolean playableNow(Card c) {
         // Forge's affordability probe asks the player's controller to choose permanents for convoke/improvise/delve;
-        // with the human controller that opens a real input. Offer those unfiltered and let Forge's payment decide.
-        if (c.hasKeyword(Keyword.CONVOKE) || c.hasKeyword(Keyword.IMPROVISE) || c.hasKeyword(Keyword.DELVE)) return true;
+        // with the human controller that opens a real input. For those spells, estimate instead (helpedAffordable).
+        boolean helped = c.hasKeyword(Keyword.CONVOKE) || c.hasKeyword(Keyword.IMPROVISE) || c.hasKeyword(Keyword.DELVE);
         try {
             for (SpellAbility sa : c.getAllPossibleAbilities(ch.player, true)) {
                 if (sa.isManaAbility()) continue;
                 if (sa.isLandAbility()) { if (ch.player.canPlayLand(c, false, sa)) return true; continue; }
+                if (helped && sa.isSpell()) { if (helpedAffordable(c, sa)) return true; continue; }
                 if (ComputerUtilCost.canPayCost(sa, ch.player, false)) return true;
             }
         } catch (RuntimeException e) {
             return true; // can't probe it: offer it and let Forge decide
         }
         return false;
+    }
+
+    /**
+     * Mana value coverable by available mana plus what convoke (untapped creatures), improvise (untapped artifacts,
+     * generic only) or delve (graveyard cards, generic only) could pay. Colours aren't checked, so Forge's payment
+     * may still fail (recorded as "cost can't be paid"); the estimate never asks the controller anything.
+     */
+    private boolean helpedAffordable(Card c, SpellAbility sa) {
+        forge.card.mana.ManaCost cost = sa.getPayCosts() != null ? sa.getPayCosts().getTotalMana() : null;
+        if (cost == null) return true;
+        int help = 0;
+        if (c.hasKeyword(Keyword.CONVOKE)) for (Card k : ch.player.getCreaturesInPlay()) if (!k.isTapped()) help++;
+        int generic = cost.getGenericCost(), genericHelp = 0;
+        if (c.hasKeyword(Keyword.IMPROVISE)) for (Card k : ch.player.getCardsIn(ZoneType.Battlefield)) if (k.isArtifact() && !k.isTapped()) genericHelp++;
+        if (c.hasKeyword(Keyword.DELVE)) for (Card k : ch.player.getCardsIn(ZoneType.Graveyard)) if (!k.equals(c)) genericHelp++;
+        help += Math.min(generic, genericHelp);
+        return forge.ai.ComputerUtilMana.getAvailableManaEstimate(ch.player, true) + help >= cost.getCMC();
     }
 
     private String stateKey(Game g) {
@@ -589,7 +794,12 @@ final class InputDriver implements Observer, Runnable {
     }
 
     private void click(String id, Game game) {
-        if (id.equals("ok")) { ctl.getInputProxy().selectButtonOK(); return; }
+        if (id.equals("ok")) {
+            // Forge's selectButtonOK doesn't check the button state (InputSelectManyBase.onOk would accept too few picks).
+            if (gui.okEnabled) ctl.getInputProxy().selectButtonOK();
+            else trace("OK is disabled: not pressed");
+            return;
+        }
         if (id.equals("cancel")) { ctl.getInputProxy().selectButtonCancel(); return; }
         if (id.startsWith("player:")) {
             int pid = Integer.parseInt(id.substring(7));
@@ -606,13 +816,25 @@ final class InputDriver implements Observer, Runnable {
         return m;
     }
 
-    private static String kindOf(Input in) {
+    /** The decision kind (src/types.ts DecisionKind) of an input; list inputs take the kind AgentControllerHuman named. */
+    private String kindOf(Input in) {
         if (in instanceof InputPassPriority) return "priority";
         if (in instanceof InputSelectTargets) return "targets";
         if (in instanceof InputPayMana) return "mana_payment";
         if (in instanceof InputAttack) return "attackers";
         if (in instanceof InputBlock) return "blockers";
-        if (in instanceof InputConfirmMulligan || in instanceof InputLondonMulligan) return "mulligan";
+        if (in instanceof InputConfirmMulligan) return "mulligan";
+        if (in instanceof InputLondonMulligan) return "london_bottom";
+        String hint = ch.kindHint;
+        if (in instanceof InputConfirm) {
+            if (List.of("play_draw", "scry", "surveil", "pay_or_else").contains(String.valueOf(hint))) return hint;
+            if (AgentGuiGame.isYesNo(List.of(gui.okLabel, gui.cancelLabel))) return "confirm";
+            java.util.Set<String> colours = new java.util.HashSet<>();
+            for (forge.card.MagicColor.Color col : forge.card.MagicColor.Color.values()) colours.add(col.getTranslatedName());
+            if (colours.contains(gui.okLabel) && colours.contains(gui.cancelLabel)) return "choose_color";
+            return "choose_option";
+        }
+        if (hint != null && !hint.equals("play_draw")) return hint;
         return "choose_cards";
     }
 }

@@ -153,8 +153,13 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         return inAgentCast && castCancelled;
     }
 
+    /** Re-ask number of the next question within one in-game step (0 = first ask); sent as "attempt", then reset. */
+    private int nextAttempt = 0;
+
     /** Ask the agent; returns chosen ids, or null if there's no valid answer. */
     List<String> ask(String kind, String prompt, List<Opt> options, int min, int max, JsonObject extraState, JsonObject hints) {
+        int att = nextAttempt;
+        nextAttempt = 0;
         max = Math.min(max, options.size());
         if (options.isEmpty() || min > max) return null;
         JsonObject req = new JsonObject();
@@ -171,6 +176,7 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         req.addProperty("min", min);
         req.addProperty("max", max);
         if (hints != null) req.add("hints", hints);
+        req.addProperty("attempt", att);
         JsonObject ans = client.request(req);
         lastAnswerForfeit = ans != null && ans.has("forfeit") && ans.get("forfeit").getAsBoolean();
         if (lastAnswerForfeit && inAgentCast) castCancelled = true;
@@ -277,6 +283,7 @@ public class PlayerControllerExternal extends PlayerControllerAi {
     private boolean turnCapReached() {
         if (getGame().getPhaseHandler().getTurn() > ctx.maxTurns && !getGame().isGameOver()) {
             client.log("turn cap reached; declaring draw");
+            for (Player p : getGame().getPlayers()) p.intentionalDraw(); // else setGameOver counts both as winners
             getGame().setGameOver(GameEndReason.Draw);
             return true;
         }
@@ -695,6 +702,7 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         String error = "";
         for (int attempt = 0; attempt <= ctx.maxRetries; attempt++) {
             int total = need.getConvertedManaCost();
+            nextAttempt = attempt;
             List<String> r = ask("mana_payment", error + "Pay " + need + " (" + total + " mana in total, generic and coloured together) for " + what
                     + ". Choose which mana sources to tap, enough to produce all " + total + " mana; only the sources you choose will be used "
                     + "(the engine assigns them to the cost). Sources you don't choose stay untapped.", opts, 1, opts.size(), null, null);
@@ -845,6 +853,7 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         hints.addProperty("opponentMaxUntappedPower", oppMaxPower);
         String error = "";
         for (int attempt = 0; attempt <= ctx.maxRetries; attempt++) {
+            nextAttempt = attempt;
             List<String> r = ask("attackers", error + "Declare attackers. Choose any number (none = no attack). Each creature may attack only one defender.",
                     opts, 0, opts.size(), null, hints);
             if (r == null) break;
@@ -903,6 +912,7 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         hints.addProperty("incomingLethal", incoming >= defender.getLife());
         String error = "";
         for (int attempt = 0; attempt <= ctx.maxRetries; attempt++) {
+            nextAttempt = attempt;
             List<String> r = ask("blockers", error + "Declare blockers. Each of your creatures can block one attacker; several can block the same attacker. Choose none to take the damage.",
                     opts, 0, defender.getCreaturesInPlay().size(), null, hints);
             if (r == null) break;

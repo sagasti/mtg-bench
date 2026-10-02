@@ -23,6 +23,19 @@ final class AgentChannel {
     Player player;
     /** The harness flagged the last answer as a forfeit (the null action). */
     boolean lastAnswerForfeit = false;
+    /**
+     * Set by AgentControllerHuman while Forge asks a question whose kind the input alone doesn't tell (discard, scry,
+     * London-mulligan bottom...); InputDriver and AgentGuiGame label the decision with it.
+     */
+    volatile String kindHint = null;
+    /** Informational messages from Forge (notifications, reveals) since the last decision; shown with the next one. */
+    private final List<String> notices = new ArrayList<>();
+    private static final int MAX_NOTICES = 12;
+    /**
+     * Re-ask number of the next question within one in-game step (0 = first ask; InputDriver sets it for retries of
+     * the same step after Forge rejected the answer). Sent as "attempt", then reset.
+     */
+    int attempt = 0;
 
     AgentChannel(BridgeClient client, MatchContext ctx, int seat) {
         this.client = client;
@@ -31,13 +44,16 @@ final class AgentChannel {
     }
 
     List<String> ask(String kind, String prompt, List<PlayerControllerExternal.Opt> options, int min, int max, JsonObject hints) {
+        int att = attempt;
+        attempt = 0;
         max = Math.min(max, options.size());
         if (options.isEmpty() || min > max) return null;
         JsonObject req = new JsonObject();
         req.addProperty("seat", seat);
         req.addProperty("game", ctx.game);
         req.addProperty("kind", kind);
-        req.addProperty("prompt", prompt);
+        String news = drainNotices();
+        req.addProperty("prompt", news.isEmpty() ? prompt : prompt + "\n(Since your last decision: " + news + ")");
         req.add("state", StateView.build(player.getGame(), player, ctx, seat));
         JsonArray opts = new JsonArray();
         for (PlayerControllerExternal.Opt o : options) opts.add(o.toJson());
@@ -45,6 +61,7 @@ final class AgentChannel {
         req.addProperty("min", min);
         req.addProperty("max", max);
         if (hints != null) req.add("hints", hints);
+        req.addProperty("attempt", att);
         JsonObject ans = client.request(req);
         lastAnswerForfeit = ans != null && ans.has("forfeit") && ans.get("forfeit").getAsBoolean();
         if (ans == null || !ans.has("choice")) return null;
@@ -57,6 +74,18 @@ final class AgentChannel {
             out.add(id);
         }
         return out.size() < min || out.size() > max ? null : out;
+    }
+
+    synchronized void notice(String text) {
+        if (text == null || text.isBlank()) return;
+        if (notices.size() >= MAX_NOTICES) notices.remove(0);
+        notices.add(StateView.clean(text).replace('\n', ' ').trim());
+    }
+
+    private synchronized String drainNotices() {
+        String s = String.join(" / ", notices);
+        notices.clear();
+        return s;
     }
 
     void auto(String category, String what, String reason) {

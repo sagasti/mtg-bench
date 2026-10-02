@@ -72,7 +72,30 @@ public class AgentGuiGame extends AbstractGuiGame {
 
     @Override public void flashIncorrectAction() { lastError = "That action isn't allowed right now."; }
     @Override public void showErrorDialog(String message, String title) { lastError = message; }
-    @Override public void message(String message, String title) { lastError = message; }
+    /**
+     * Forge's message dialog carries both notifications (a chosen colour, a coin flip, "no cards in hand") and a few
+     * rejections, told apart by their title. Rejections go to the agent as "Forge rejected your last choice";
+     * everything else is information, shown with the next decision.
+     */
+    @Override public void message(String message, String title) {
+        forge.util.Localizer l = forge.util.Localizer.getInstance();
+        if (title != null && (title.equals(l.getMessage("lblCostPaymentInvalid")) || title.equals(l.getMessage("lblError")))) lastError = message;
+        else ch.notice(message);
+    }
+
+    /** Reveals are information, not questions: Forge's default asks "choose 0 to N" and ignores the answer. */
+    @Override public <T> void reveal(String message, List<T> items) {
+        List<String> names = new ArrayList<>();
+        for (T t : items) names.add(label(t));
+        ch.notice((message == null ? "Revealed" : message) + ": " + String.join(", ", names));
+    }
+
+    /** Cards revealed for the current prompt (an opponent's hand); InputDriver acknowledges the prompt itself. */
+    @Override public void showRevealedCards(Iterable<CardView> cards) {
+        List<String> names = new ArrayList<>();
+        for (CardView c : cards) names.add(label(c));
+        ch.notice("Revealed: " + String.join(", ", names));
+    }
 
     /** Skipped phases: same "meaningful stops" as the AI-controller bridge (MatchContext.smartStops). */
     private final java.util.Set<String> skippedStops = new java.util.HashSet<>();
@@ -94,10 +117,18 @@ public class AgentGuiGame extends AbstractGuiGame {
 
     private int chooseIndex(String kind, String prompt, List<String> labels, boolean optional) {
         List<PlayerControllerExternal.Opt> opts = new ArrayList<>();
-        for (int i = 0; i < labels.size(); i++) opts.add(new PlayerControllerExternal.Opt("o" + (i + 1), labels.get(i), null));
+        // A yes/no question answers with ids "yes"/"no", so the harness's forfeit (null action) declines it.
+        boolean yesNo = isYesNo(labels);
+        for (int i = 0; i < labels.size(); i++) opts.add(new PlayerControllerExternal.Opt(yesNo ? (i == 0 ? "yes" : "no") : "o" + (i + 1), labels.get(i), null));
         List<String> r = ch.ask(kind, prompt, opts, optional ? 0 : 1, 1, null);
         if (r == null || r.isEmpty()) return -1;
+        if (yesNo) return r.get(0).equals("yes") ? 0 : 1;
         return Integer.parseInt(r.get(0).substring(1)) - 1;
+    }
+
+    static boolean isYesNo(List<String> labels) {
+        forge.util.Localizer l = forge.util.Localizer.getInstance();
+        return labels.size() == 2 && labels.get(0).equals(l.getMessage("lblYes")) && labels.get(1).equals(l.getMessage("lblNo"));
     }
 
     private static String label(Object o) {
@@ -143,7 +174,8 @@ public class AgentGuiGame extends AbstractGuiGame {
             T t = choices.get(i);
             opts.add(new PlayerControllerExternal.Opt("o" + (i + 1), display != null ? display.apply(t) : label(t), t instanceof CardView cv ? cv.getName() : null));
         }
-        List<String> r = ch.ask(min <= 1 && max == 1 ? "choose_entity" : "choose_cards", message, opts, Math.max(0, min), max < 0 ? choices.size() : max, null);
+        String kind = ch.kindHint != null ? ch.kindHint : min <= 1 && max == 1 ? "choose_entity" : "choose_cards";
+        List<String> r = ch.ask(kind, message, opts, Math.max(0, min), max < 0 ? choices.size() : max, null);
         List<T> out = new ArrayList<>();
         if (r == null) {
             for (int i = 0; i < Math.max(0, min) && i < choices.size(); i++) out.add(choices.get(i));
@@ -185,7 +217,8 @@ public class AgentGuiGame extends AbstractGuiGame {
         while (remaining.size() > 1) {
             List<String> labels = new ArrayList<>();
             for (T t : remaining) labels.add(label(t));
-            int i = chooseIndex("order_triggers", title + " (" + (top != null ? top : "first") + ": pick the next one)", labels, false);
+            String kind = "scry".equals(ch.kindHint) ? "scry_order" : "surveil".equals(ch.kindHint) ? "surveil_order" : "order_triggers";
+            int i = chooseIndex(kind, title + " (" + (top != null ? top : "first") + ": pick the next one)", labels, false);
             ordered.add(remaining.remove(Math.max(0, i)));
         }
         ordered.addAll(remaining);
