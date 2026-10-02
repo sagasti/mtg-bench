@@ -177,6 +177,11 @@ final class InputDriver implements Observer, Runnable {
         declarationKey = key;
         batches = 0;
         asks = 0;
+        // The game thread posts the input's first message to the event thread after announcing the input, so the
+        // flushes in awaitMessage can run before it is even posted; until it has run, the prompt and buttons are the
+        // previous input's (and InputAttack has no defender yet). Wait for this input's own message, briefly.
+        long shown = System.currentTimeMillis() + 2_000;
+        while (in == lastQueued && gui.promptSeq == seqAtQueue && current(in) && System.currentTimeMillis() < shown) Thread.sleep(2);
         for (click = 0; click < MAX_CLICKS_PER_INPUT && current(in); click++) {
             awaitMessage(in);
             // Forge activates a mana source asynchronously (on a game executor thread); wait for it like a human would
