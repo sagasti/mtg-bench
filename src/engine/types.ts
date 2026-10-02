@@ -61,6 +61,10 @@ export interface MatchResult {
   engineErrors?: EngineError[];
   /** Set when the match was abandoned (timeout, bridge crash, provider outage); the match is then censored from standings and ratings. */
   error?: string;
+  /** What kind of failure `error` is. Every kind but "harness" (a bug in our code) is replayed once (tournament/run.ts). */
+  errorKind?: "infra" | "timeout" | "bridge" | "harness";
+  /** This match replays the errored match with this id: same seats, decks and seed, played from scratch. */
+  replayOf?: string;
   /** The run the row was read from (set by readMatches), so matches of different runs never share a bootstrap cluster. */
   runId?: string;
 }
@@ -70,6 +74,9 @@ export interface GameEngine {
   playMatch(spec: MatchSpec): Promise<MatchResult>;
   close?(): Promise<void>;
 }
+
+/** An errored match worth one more try: a provider/infrastructure error, a match timeout or a bridge crash, not a harness bug. */
+export const replayable = (m: MatchResult) => !!m.error && !!m.errorKind && m.errorKind !== "harness";
 
 /** Best-of-N bookkeeping shared by engines. */
 export function matchOver(games: GameResult[], bestOf: number): boolean {

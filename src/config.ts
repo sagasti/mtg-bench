@@ -82,7 +82,9 @@ export interface EngineConfig {
   /** Which Forge controller agent seats use: "human" (default: Forge's human controller + headless screen) or "ai" (PlayerControllerExternal, kept for comparison). */
   controller?: "ai" | "human";
   javaOpts?: string[];
-  matchTimeoutSec?: number;      // hard wall-clock cap per match
+  /** Wall-clock budget per game, used to size the match cap: gamesPerMatch × this (default 3600, i.e. 60 min a game). */
+  gameTimeoutSec?: number;
+  matchTimeoutSec?: number;      // hard wall-clock cap per match; overrides gamesPerMatch × gameTimeoutSec
   /** Seats whose in-game decisions go to Forge AI even if they're LLMs (debug). */
 }
 

@@ -7,7 +7,7 @@ Every run writes to `runs/<runId>/`:
 | `usage.jsonl` | **model API call** | seat, provider, model, phase, kind, requestId, matchId, game, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens`, `latencyMs`, `stopReason`, `httpStatus`, `error` (every failed provider attempt, retried or not), `toolCallsRequested`, `servedBy`, `truncated` (hit the output cap), `timedOut` (aborted by the decision clock), `specViolation` (broke the seat's reasoning/host spec) |
 | `decisions.jsonl` | **decision** | the same ids, token totals for the decision, `numOptions`, `choice`, `choiceLabels`, `valid`, `invalidAttempts`, `fallback`, `autoResolved`, `modelCalls`, `toolCalls` by name, `latencyMs`, `rationale`, `error` (why it failed), `forfeit`, `infraError` (the match was abandoned after this row), `timedOut`, `truncated` (calls cut off), `specViolation`, `attempt` (an engine re-ask of the same step). Match notes have phase `between_games`. |
 | `draft.jsonl` | draft pick | seat, pack, pick, card taken, full pack contents |
-| `matches.jsonl` | match | seats, per-game winner, on-the-play, turns, end reason, decisions per seat, duration, `delegations` (decisions Forge's AI made for an agent) |
+| `matches.jsonl` | match | seats, per-game winner, on-the-play, turns, end reason, decisions per seat, duration, `delegations` (decisions Forge's AI made for an agent), `error` + `errorKind` (abandoned match), `replayOf` (a replay of that errored match) |
 | `events.jsonl` | run/pod milestone | seating, standings, cube size, seeds; `run_start.provenance`: harness commit (+ uncommitted-changes flag), engine, Forge commit (else jar name), bridge jar SHA-256, `cards.json` and rankings-file SHA-256 (also in `config.json`, and in report.md under "Versions") |
 | `pod<N>/decks/*.dck, *.json` | deck | main deck, sideboard, basics |
 | `prep/<seat>.md` | seat | cube-study brief |
@@ -25,13 +25,17 @@ Cost = input·price.input + output·price.output + cacheRead·price.cacheRead + 
 
 Decisions with exactly one legal answer are **auto-resolved** and never sent to a model. They're counted separately, so tokens-per-decision reflects real choices only.
 
-## Errored matches are censored
+## Errored matches are replayed once, then censored
 
-A match that ends in an error (`error` set in `matches.jsonl`: match timeout, bridge crash, provider outage, harness error) is **censored**:
+A match that ends in an error (`error` set in `matches.jsonl`, with `errorKind`: `infra` provider outage, `timeout` match timeout, `bridge` bridge crash, `harness` a bug in our code) is first **replayed**, unless it was a harness bug: once the round's other matches are done, it is played again from scratch with the same seats, decks and seed, as match `<id>-replay` with `replayOf: <id>`. The replay stands in for the match in standings and ratings. Bots' and the echo provider's random streams have moved on by then, so a replay isn't a re-run of the same games. The errored attempt stays in `matches.jsonl` (its tokens are in the cost tables) but counts nowhere else.
+
+The match timeout is `engine.matchTimeoutSec` if set, else `gamesPerMatch` × `engine.gameTimeoutSec` (default 3600 s: 60 minutes a game, 3 h for best-of-3), so a slow seat's long matches aren't cut off at a fixed 2 h.
+
+A match whose replay errors too, or that hit a harness bug, is **censored**:
 
 - it has no winner (`winner: null`) and awards no Swiss/standings points to either seat (`pod_end` standings list a seat's censored matches);
 - it is left out of the ratings at both levels, **including the games it finished**. Errors cut off long matches (control decks, game 3s, the slower provider's seat), so keeping the finished games and dropping the rest would bias the sample;
-- its raw games stay in `matches.jsonl`, and `report.md` / `summary.json` list censored matches and the finished games left out, per seat.
+- its raw games stay in `matches.jsonl`, and `report.md` / `summary.json` list replayed matches, censored matches and the finished games left out, per seat (a pairing whose replay errored counts once as censored).
 
 A seat with many censored matches is rated on a biased sample even so; fix the cause and re-run rather than reading its rating.
 

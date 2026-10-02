@@ -44,14 +44,19 @@ export function cappedDrawsBySeat(matches: MatchResult[]): Map<string, number> {
   return out;
 }
 
-/** Errored matches per seat, and the finished games of those matches that the ratings leave out. */
-export function censoredBySeat(matches: MatchResult[]): Map<string, { matches: number; games: number }> {
-  const out = new Map<string, { matches: number; games: number }>();
+/**
+ * Per seat: censored matches (errored with no replay, or whose replay errored too: counted once), the finished games
+ * of those that the ratings leave out, and errored matches that were replayed (whatever the replay's outcome).
+ */
+export function censoredBySeat(matches: MatchResult[]): Map<string, { matches: number; games: number; replayed: number }> {
+  const replayed = new Set(matches.filter((m) => m.replayOf).map((m) => `${m.runId ?? ""}/${m.replayOf}`));
+  const out = new Map<string, { matches: number; games: number; replayed: number }>();
   for (const m of matches) {
     if (!m.error) continue;
     for (const seat of m.seats) {
-      const c = out.get(seat) ?? { matches: 0, games: 0 };
-      c.matches++; c.games += m.games.length;
+      const c = out.get(seat) ?? { matches: 0, games: 0, replayed: 0 };
+      if (replayed.has(`${m.runId ?? ""}/${m.matchId}`)) c.replayed++;
+      else { c.matches++; c.games += m.games.length; }
       out.set(seat, c);
     }
   }

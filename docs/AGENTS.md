@@ -78,6 +78,8 @@ Per decision the harness validates the answer. An illegal answer (including a ma
 
 The time budget works like a chess clock: it counts the model's time only. Provider failures are not the agent's: 429, 408, 529, 5xx, network errors and in-body errors (HTTP 200 with `finish_reason: "error"`, or an empty answer with no output tokens) are retried with exponential backoff, honouring `Retry-After` (capped at 60 s); the clock is paused while backing off and doesn't count failed attempts. A provider that keeps failing abandons the match as an infrastructure error. An answer cut off by the output cap (`length` / `max_tokens`) is asked again once with twice the cap (up to 32768) and marked `truncated`. An exception inside the harness (rendering, templates, the prompt-leak guard) abandons the match as a harness error rather than counting as a forfeit.
 
+An abandoned match that wasn't a harness bug (provider failure, match timeout, bridge crash) is replayed once from scratch, same decks and seed, at the end of its round; if the replay fails too it is censored (docs/ANALYTICS.md). The match timeout is `engine.matchTimeoutSec` if set, else `gamesPerMatch` × `engine.gameTimeoutSec` (default 3600 s, i.e. 60 minutes a game: 3 h for best-of-3). Raise `gameTimeoutSec` for slow seats (reasoning models, two LLMs in one match) rather than letting their long matches be cut off.
+
 ## Cost planning
 
 Rough call counts per pod, with `round-robin` and best-of-3:

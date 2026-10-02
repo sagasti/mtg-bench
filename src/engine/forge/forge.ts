@@ -44,6 +44,11 @@ export function resolveForge(cfg: EngineConfig) {
   return { forgeDir, forgeJar, bridgeJar, cwd };
 }
 
+/** Wall-clock cap per match: engine.matchTimeoutSec, else gamesPerMatch × engine.gameTimeoutSec (default 60 min a game). */
+export function matchTimeoutSec(cfg: EngineConfig, gamesPerMatch: number): number {
+  return cfg.matchTimeoutSec ?? gamesPerMatch * (cfg.gameTimeoutSec ?? 3600);
+}
+
 export class ForgeEngine implements GameEngine {
   readonly name = "forge";
   constructor(private cfg: EngineConfig) {}
@@ -70,7 +75,7 @@ export class ForgeEngine implements GameEngine {
       let settled = false;
       const server = net.createServer();
       let child: ReturnType<typeof spawn> | null = null;
-      const finish = (error?: string) => {
+      const finish = (error?: string, errorKind?: MatchResult["errorKind"]) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
@@ -81,9 +86,12 @@ export class ForgeEngine implements GameEngine {
         const w0 = games.filter((g) => g.winner === 0).length, w1 = games.filter((g) => g.winner === 1).length;
         // An abandoned match has no winner, whatever the score when it stopped (its games stay in `games` for the record).
         resolve({ matchId: spec.matchId, pod: spec.pod, round: spec.round, seats: [spec.seats[0].id, spec.seats[1].id], games,
-          winner: error ? null : w0 > w1 ? 0 : w1 > w0 ? 1 : null, delegations, forfeits, auto, engineErrors, error });
+          winner: error ? null : w0 > w1 ? 0 : w1 > w0 ? 1 : null, delegations, forfeits, auto, engineErrors, error, ...(error ? { errorKind } : {}) });
       };
-      const timer = setTimeout(() => finish(`match timeout after ${this.cfg.matchTimeoutSec ?? 7200}s`), (this.cfg.matchTimeoutSec ?? 7200) * 1000);
+      // Provider failures are infrastructure; anything else thrown while answering is a bug in the harness.
+      const abandon = (e: any) => finish(`${e instanceof InfraError ? "infrastructure error" : "harness error"}: ${e?.message ?? e}`, e instanceof InfraError ? "infra" : "harness");
+      const timeoutSec = matchTimeoutSec(this.cfg, spec.gamesPerMatch);
+      const timer = setTimeout(() => finish(`match timeout after ${timeoutSec}s`, "timeout"), timeoutSec * 1000);
 
       server.on("connection", (sock) => {
         const rl = readline.createInterface({ input: sock });
@@ -114,7 +122,7 @@ export class ForgeEngine implements GameEngine {
                 send({ type: "answer", rid: msg.rid, choice: res.choice, ...(res.forfeit ? { forfeit: true } : {}) });
               } catch (e: any) {
                 // Provider outage or harness bug: abandon the match rather than play it on the agent's behalf.
-                finish(`${e instanceof InfraError ? "infrastructure error" : "harness error"}: ${e?.message ?? e}`);
+                abandon(e);
               }
               break;
             }
@@ -143,7 +151,7 @@ export class ForgeEngine implements GameEngine {
                 })));
                 send({ type: "answer", rid: msg.rid });
               } catch (e: any) {
-                finish(`${e instanceof InfraError ? "infrastructure error" : "harness error"}: ${e?.message ?? e}`);
+                abandon(e);
               }
               break;
             }
@@ -178,8 +186,8 @@ export class ForgeEngine implements GameEngine {
         ];
         fs.writeSync(logFile, `$ ${this.cfg.java ?? "java"} ${args.join(" ")}\n(cwd ${cwd})\n`);
         child = spawn(this.cfg.java ?? "java", args, { cwd, stdio: ["ignore", logFile, logFile] });
-        child.on("exit", (code) => { if (!settled) setTimeout(() => finish(code === 0 ? undefined : `bridge exited with code ${code} (see forge-logs/${spec.matchId}.log)`), 200); });
-        child.on("error", (e) => finish(`failed to start java: ${e.message}`));
+        child.on("exit", (code) => { if (!settled) setTimeout(() => finish(code === 0 ? undefined : `bridge exited with code ${code} (see forge-logs/${spec.matchId}.log)`, "bridge"), 200); });
+        child.on("error", (e) => finish(`failed to start java: ${e.message}`, "bridge"));
       });
     });
   }

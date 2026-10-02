@@ -9,7 +9,7 @@ One file per ticket. Status: open | in progress | done | dropped.
 | [MB-003](MB-003.md) | Provider errors and truncated outputs are scored as the agent's mistakes | high | done |
 | [MB-004](MB-004.md) | Seats aren't in the same reasoning regime or on pinned hosts | high | in progress |
 | [MB-005](MB-005.md) | The prompt misdescribes the interface; harness policies shape which decisions exist | medium | in progress |
-| [MB-006](MB-006.md) | Errored and timed-out matches censor long games non-randomly | medium | in progress |
+| [MB-006](MB-006.md) | Errored and timed-out matches censor long games non-randomly | medium | done |
 | [MB-007](MB-007.md) | maxGameTurns isn't enforced on the default (human) bridge | medium | done |
 | [MB-008](MB-008.md) | Same seed means same packs: runs aren't independent replicates | medium | done |
 | [MB-009](MB-009.md) | Cube contamination; bot-only computed hints; coarse decision kinds on the human path | medium | in progress |
@@ -17,7 +17,7 @@ One file per ticket. Status: open | in progress | done | dropped.
 | [MB-011](MB-011.md) | Cost and wall-clock scale with the slowest, most expensive seat | medium | open |
 | [MB-012](MB-012.md) | Missing pieces for defensible published results | medium | open |
 | [MB-013](MB-013.md) | Mandatory targets arrive with min 0; empty answers accepted; rank-bot answers [] (root cause of MB-002's forfeits) | high | done |
-| [MB-014](MB-014.md) | A decision timeout abandons the whole match as an infrastructure error | high | in progress |
+| [MB-014](MB-014.md) | A decision timeout abandons the whole match as an infrastructure error | high | done |
 | [MB-015](MB-015.md) | Harness exceptions become agent forfeits, and forfeit rows drop the error | medium | done |
 | [MB-016](MB-016.md) | Malformed submit_decision calls are coerced to choice [] and accepted when min is 0 | medium | done |
 | [MB-017](MB-017.md) | Errored matches still award standings points and match-level results | medium | done |

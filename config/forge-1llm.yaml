@@ -35,7 +35,7 @@ engine:
   # forgeJar: ~/forge/forge-gui-desktop-2.0.xx-jar-with-dependencies.jar   # auto-detected if omitted
   # bridgeJar: bridge/build/mtg-bench-bridge.jar                          # default
   javaOpts: ["-Xmx3g"]
-  matchTimeoutSec: 7200
+  gameTimeoutSec: 3600            # wall-clock budget per game; the match cap is gamesPerMatch × this (matchTimeoutSec overrides)
 
 outputDir: runs
 
