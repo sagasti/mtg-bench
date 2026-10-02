@@ -89,6 +89,14 @@ npm run bench -- run config/smoke.mock.yaml --forge-res <forge>/res --run-id smo
 ```
 **Done when** it finishes and writes `runs/smoke-mock/report.md`.
 
+#### Re-running from saved state
+A finished run can seed a new one, so the expensive early stages (study, draft, deckbuild) don't have to be repeated to replay the matches or try a different engine setting:
+```bash
+npm run bench -- run <config.yaml> --decks-from runs/<source>   # seating + decks from the source; only the matches are played
+npm run bench -- run <config.yaml> --pools-from runs/<source>   # seating + drafted pools from the source; deckbuild and matches are played
+```
+Both reuse the source's seating (`events.jsonl` `pod_start`) and, for LLM seats, the study brief (`prep/<seat>.md`) and the pod scratchpad (`pod<N>/notes/<seat>.md`, written after the draft and again after deckbuild, so it holds the seat's latest notes). Decks come from `pod<N>/decks/<seat>.json`; pools are rebuilt from the `pick` rows in `draft.jsonl`. The config's seat ids must match the source's. Match seeds come from the new config's `seed`; the new run gets its own run dir, records `source: { runDir, mode }` in `config.json` and the `run_start` event, and never writes to the source.
+
 ### T6. Forge with bots only (the important one, and free)
 Edit `config/forge-bots.yaml`: set `engine.forgeDir`, plus `forgeRes` if needed. Then:
 ```bash
@@ -141,7 +149,7 @@ src/agents/providers/         anthropic.ts, openai.ts (OpenAI-compatible), echo.
 src/agents/bots.ts            random / rank-bot / forge-ai drafting+building policies
 src/knowledge/                lookup_card / search_cube / search_rules tools, CR index
 src/draft/ src/deckbuild/     draft (3×15, passing) and deckbuilding
-src/tournament/               run.ts (event loop), schedule.ts (round robin / Swiss)
+src/tournament/               run.ts (event loop), resume.ts (--decks-from / --pools-from), schedule.ts (round robin / Swiss)
 src/engine/forge/forge.ts     spawns the bridge JVM, TCP protocol, delegation capture
 src/engine/mock/mock.ts       simplified engine (testing only)
 src/analytics/                recorder.ts (JSONL), report.ts (report.md / summary.json)

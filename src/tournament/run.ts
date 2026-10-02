@@ -1,4 +1,7 @@
-/** Runs an event: cube study → (per pod) draft → deckbuild → matches → ratings + analytics. */
+/**
+ * Runs an event: cube study → (per pod) draft → deckbuild → matches → ratings + analytics.
+ * With a source run (see resume.ts) the early stages are replaced by what that run saved.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { makeSeat } from "../agents/factory.ts";
@@ -9,13 +12,14 @@ import { loadDb } from "../cards/db.ts";
 import { loadCube, loadRankings } from "../cards/cube.ts";
 import type { BenchConfig } from "../config.ts";
 import { buildDeck, type Deck, saveDeck } from "../deckbuild/deckbuild.ts";
-import { runDraft } from "../draft/draft.ts";
+import { type CardInstance, runDraft } from "../draft/draft.ts";
 import type { GameEngine, MatchResult } from "../engine/types.ts";
 import { KnowledgeBase } from "../knowledge/tools.ts";
 import { rate } from "../rating/bt.ts";
 import { outcomesFromMatches } from "../rating/outcomes.ts";
 import { info, Jsonl } from "../util/log.ts";
 import { Rng } from "../util/rng.ts";
+import { type RunSource, saveNotes, SourceRun } from "./resume.ts";
 import { roundRobin, swissRound } from "./schedule.ts";
 
 export async function pool<T, R>(items: T[], limit: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
@@ -26,13 +30,15 @@ export async function pool<T, R>(items: T[], limit: number, fn: (x: T, i: number
   return out;
 }
 
-export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { runId?: string } = {}) {
+export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { runId?: string; source?: RunSource } = {}) {
   const ev = cfg.event;
   const runId = opts.runId ?? `${new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19)}_${ev.name.replace(/[^A-Za-z0-9_-]+/g, "_")}`;
   const runDir = path.join(cfg.outputDir, runId);
+  const source = opts.source ? new SourceRun(opts.source, cfg) : null;
+  if (source && path.resolve(source.src.runDir) === path.resolve(runDir)) throw new Error("the new run must not be its own source");
   fs.mkdirSync(runDir, { recursive: true });
-  // Snapshot config (keys live in env vars, so this is safe to keep) + prompts used.
-  fs.writeFileSync(path.join(runDir, "config.json"), JSON.stringify(cfg, null, 2));
+  // Snapshot config (keys live in env vars, so this is safe to keep) + prompts used; a derived run also records its source.
+  fs.writeFileSync(path.join(runDir, "config.json"), JSON.stringify({ ...cfg, source: opts.source }, null, 2));
   fs.cpSync(path.resolve("prompts", ev.promptVersion), path.join(runDir, "prompts"), { recursive: true });
 
   const db = loadDb();
@@ -47,9 +53,10 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
   const matchLog = new Jsonl(path.join(runDir, "matches.jsonl"));
   const allMatches: MatchResult[] = [];
   info(`run ${runId}: ${seats.length} seats, ${ev.pods} pod(s), ${ev.format}, bo${ev.gamesPerMatch}, engine=${engine.name}, knowledge=${ev.knowledge}`);
-  recorder.event("run_start", { cube: cube.name, cubeSize: cube.cards.length, seats: cfg.seats.map((s) => ({ id: s.id, provider: s.provider, model: s.model })) });
+  if (source) info(`${source.src.mode} from ${source.src.runDir}: study${source.src.mode === "decks" ? ", draft and deckbuild" : " and draft"} skipped`);
+  recorder.event("run_start", { cube: cube.name, cubeSize: cube.cards.length, seats: cfg.seats.map((s) => ({ id: s.id, provider: s.provider, model: s.model })), source: opts.source });
 
-  if (ev.cubeStudy) {
+  if (ev.cubeStudy && !source) {
     info("cube study…");
     fs.mkdirSync(path.join(runDir, "prep"), { recursive: true });
     await Promise.all(seats.map(async (s) => {
@@ -60,16 +67,32 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
 
   for (let pod = 0; pod < ev.pods; pod++) {
     const prng = rng.fork(`pod${pod}`);
-    const order: Seat[] = ev.rotateSeats ? prng.shuffle([...seats]) : [...seats];
+    const order: Seat[] = source ? source.seating[pod].map((id) => seats.find((s) => s.id === id)!) : ev.rotateSeats ? prng.shuffle([...seats]) : [...seats];
     info(`pod ${pod + 1}/${ev.pods}: seating ${order.map((s) => s.id).join(" → ")}`);
     recorder.event("pod_start", { pod, seating: order.map((s) => s.id) });
 
-    const draft = await runDraft({ seats: order, cube: cube.cards, event: ev, db, rng: prng.fork("draft"), pod, log: draftLog });
-    info(`pod ${pod + 1}: draft done`);
     const deckDir = path.join(runDir, `pod${pod}`, "decks");
-    const decks: Deck[] = await Promise.all(order.map((s, i) => buildDeck(s, draft.pools[i], ev, db, pod)));
+    let decks: Deck[];
+    if (source?.src.mode === "decks") {
+      source.restoreContext(order, runDir, pod);
+      decks = order.map((s) => source.deck(pod, s.id));
+      info(`pod ${pod + 1}: decks loaded (${decks.map((d) => d.main.length).join(", ")} cards)`);
+    } else {
+      let pools: CardInstance[][];
+      if (source) {
+        source.restoreContext(order, runDir, pod);
+        pools = order.map((s) => source.pool(pod, s.id));
+        info(`pod ${pod + 1}: pools loaded (${pools.map((p) => p.length).join(", ")} cards)`);
+      } else {
+        pools = (await runDraft({ seats: order, cube: cube.cards, event: ev, db, rng: prng.fork("draft"), pod, log: draftLog })).pools;
+        saveNotes(runDir, pod, order);
+        info(`pod ${pod + 1}: draft done`);
+      }
+      decks = await Promise.all(order.map((s, i) => buildDeck(s, pools[i], ev, db, pod)));
+      saveNotes(runDir, pod, order);
+      info(`pod ${pod + 1}: decks built (${decks.map((d) => d.main.length).join(", ")} cards)`);
+    }
     const deckFiles = decks.map((d) => saveDeck(deckDir, d));
-    info(`pod ${pod + 1}: decks built (${decks.map((d) => d.main.length).join(", ")} cards)`);
 
     const n = order.length;
     const points = new Array(n).fill(0);

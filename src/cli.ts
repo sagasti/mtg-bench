@@ -5,6 +5,7 @@
  *   cubes --forge-res <dir>               list cubes bundled with Forge and their sizes
  *   check <config.yaml> [--ping]          validate config, keys, card data, cube, engine, rules file
  *   run <config.yaml> [--engine mock|forge] [--pods N] [--run-id ID] [--forge-res DIR]
+ *       [--decks-from RUNDIR | --pools-from RUNDIR]   replay a saved run's seating + decks (matches only) or drafted pools (deckbuild + matches)
  *   match <config.yaml> --seats A,B --decks a.dck,b.dck [--matches N] [--parallel N] [--run-id ID]   head-to-head with fixed decks, no draft
  *   report <runDir...>                    (re)build report.md for one run, or a merged report for several
  *   rate <runDir...> [--level game|match] [--anchor seat=1500]
@@ -114,7 +115,10 @@ async function main() {
       if (miss.length) throw new Error("missing API keys:\n  " + miss.join("\n  "));
       const engine = engineType === "forge" ? new ForgeEngine(cfg.engine) : new MockEngine(loadDb());
       if (engineType === "mock") info("NOTE: mock engine — simplified rules, for pipeline testing only.");
-      const { runDir, ratings } = await runEvent(cfg, engine, { runId: flag(args, "run-id") });
+      if (flag(args, "decks-from") && flag(args, "pools-from")) throw new Error("--decks-from and --pools-from are mutually exclusive");
+      const source = flag(args, "decks-from") ? { runDir: path.resolve(flag(args, "decks-from")!), mode: "decks" as const }
+        : flag(args, "pools-from") ? { runDir: path.resolve(flag(args, "pools-from")!), mode: "pools" as const } : undefined;
+      const { runDir, ratings } = await runEvent(cfg, engine, { runId: flag(args, "run-id"), source });
       console.log("\nRatings:");
       for (const r of ratings) console.log(`  ${r.id.padEnd(22)} ${r.rating.toFixed(0).padStart(5)}  [${r.lo.toFixed(0)}–${r.hi.toFixed(0)}]  ${r.score.toFixed(1)}/${r.games}`);
       console.log(`\nReport: ${path.join(runDir, "report.md")}`);

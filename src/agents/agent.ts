@@ -139,6 +139,9 @@ export class Seat {
 
   /** Carry draft notes into deckbuilding explicitly (same scope already, kept for clarity). */
   clearScope(scope: string) { this.notes.delete(scope); }
+  /** Scratchpad access for persisting a scope to disk and restoring it in a re-run. */
+  getNotes(scope: string) { return this.notes.get(scope); }
+  setNotes(scope: string, notes: string) { this.notes.set(scope, notes); }
 }
 
 function labels(req: DecisionRequest, ids: string[]) {
