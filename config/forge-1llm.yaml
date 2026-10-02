@@ -6,7 +6,7 @@
 
 event:
   name: forge-1llm                 # label for the run folder; never shown to agents
-  cube: "Adam Styborkski's Pauper Cube"   # a cube bundled with Forge (see `bench cubes`) or a path to a .dck/.txt list; never shown to agents
+  cube: "LSVCube"   # a cube bundled with Forge (see `bench cubes`) or a path to a .dck/.txt list; never shown to agents
   pods: 1                         # independent draft pods (reseated each pod); ratings pool all pods
   seed: 42
   format: round-robin             # round-robin (7 rounds, every pair once) | swiss
@@ -20,20 +20,22 @@ event:
   briefMaxWords: 1000
   briefScope: all                 # draft | all (draft + deckbuild + games)
   carryNotes: true                # agents may keep a scratchpad between decisions
-  promptVersion: v1               # prompts/v1/*
+  promptVersion: v2               # prompts/v2/* (v2: per-game scratchpad + match notes written between games)
   maxToolCallsPerDecision: 6
-  maxRetries: 2                   # re-asks after an illegal answer before falling back
+  maxRetries: 3                   # re-asks after a failed answer before the decision is forfeited (null action)
   decisionTimeoutSec: 180
   maxGameTurns: 40                # draw after this many turns
+  recordPrompts: true            # keep rendered prompts for review (T7)
   parallelMatches: 4              # matches in a round run concurrently
   priorityStops: smart
   manaPayment: smart
 
 engine:
   type: forge                     # forge | mock (mock = pipeline testing only)
-  forgeDir: ~/forge               # Forge install dir (contains res/ and forge-gui-desktop-*-jar-with-dependencies.jar)
+  forgeDir: ~/forge-src           # Forge install dir (contains res/ and forge-gui-desktop-*-jar-with-dependencies.jar)
   # forgeJar: ~/forge/forge-gui-desktop-2.0.xx-jar-with-dependencies.jar   # auto-detected if omitted
   # bridgeJar: bridge/build/mtg-bench-bridge.jar                          # default
+  java: /home/linuxbrew/.linuxbrew/opt/openjdk@17/bin/java
   javaOpts: ["-Xmx3g"]
   matchTimeoutSec: 7200
 
@@ -41,17 +43,21 @@ outputDir: runs
 
 # USD per 1M tokens, keyed by model id. Fill in from each provider's pricing page;
 # models without an entry show "n/a" for cost (token counts are always recorded).
-pricing: {}
+pricing:
+  deepseek/deepseek-v4-flash: { input: 0.042, output: 0.084, cacheRead: 0.008 }   # OpenRouter models API, 2026-10-01
 #  claude-opus-5-5:   { input: 0.0, output: 0.0, cacheRead: 0.0, cacheWrite: 0.0 }
 #  claude-sonnet-5:   { input: 0.0, output: 0.0, cacheRead: 0.0, cacheWrite: 0.0 }
 
 # One cheap LLM seat + 7 bots: measures real tokens/decision and cost per pod before scaling up.
 seats:
-  - id: claude-sonnet
-    provider: anthropic
-    model: claude-sonnet-5
-    apiKeyEnv: ANTHROPIC_API_KEY
+  - id: deepseek-flash
+    provider: openrouter
+    model: deepseek/deepseek-v4-flash
+    apiKeyEnv: OPENROUTER_API_KEY
     maxTokens: 2048
+    # Iteration runs: no hidden thinking (~2 min/pick with it on). Pin one fp8 host: OpenRouter otherwise spreads
+    # this model over ~15 hosts with different prices (output $0.084–$1.28/M) and quantizations.
+    extraBody: { reasoning: { enabled: false }, provider: { order: [baidu], allow_fallbacks: false } }
   - { id: forge-ai-1, provider: forge-ai }
   - { id: forge-ai-2, provider: forge-ai }
   - { id: rank-1, provider: rank-bot }
