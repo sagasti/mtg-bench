@@ -164,6 +164,9 @@ final class InputDriver implements Observer, Runnable {
     private int batches = 0;
     /** Single-click questions asked on the current input. */
     private int asks = 0;
+    /** What the current payment still owed when Auto was pressed (null: not pressed since), and whether Auto failed on it. */
+    private String owedAtAuto = null;
+    private boolean autoFailed = false;
 
     private void drive(Input in) throws Exception {
         trace("drive " + in.getClass().getSimpleName());
@@ -177,6 +180,8 @@ final class InputDriver implements Observer, Runnable {
         declarationKey = key;
         batches = 0;
         asks = 0;
+        owedAtAuto = null;
+        autoFailed = false;
         // The game thread posts the input's first message to the event thread after announcing the input, so the
         // flushes in awaitMessage can run before it is even posted; until it has run, the prompt and buttons are the
         // previous input's (and InputAttack has no defender yet). Wait for this input's own message, briefly.
@@ -619,17 +624,30 @@ final class InputDriver implements Observer, Runnable {
                 if (src == null || !interchangeableSource(src)) interchangeable = false;
             }
             int need = remainingMana(in);
-            // Forge enables Auto only when the cost can be paid. Unpayable: cancel (the cast rolls back).
-            // Every legal payment taps the same kind of source: let Auto pay (unless manaPayment: always). Otherwise the
-            // agent picks the sources.
-            if (!gui.okEnabled) {
+            // Auto pressed on this payment last step and nothing changed: Forge's AI payer couldn't pay. No more Auto here.
+            String owed = owedKey(in);
+            if (owedAtAuto != null && owedAtAuto.equals(owed) && !autoFailed) {
+                autoFailed = true;
+                trace("payment: Auto changed nothing; asking for sources instead");
+            }
+            owedAtAuto = null;
+            // Forge enables Auto from a plan it makes once per payment and keeps while plain sources are tapped, so the
+            // button stays enabled after the sources it planned are gone (tapped for another part of the cost). Plan again
+            // now: no plan means the cost can't be paid any more, whatever the button says.
+            List<Card> plan = freshAutoPlan(in);
+            trace("payment: need=" + need + " sources=" + sources.stream().map(o -> o.id + ":" + o.card).toList() + " plan=" + plan
+                    + " pool=" + ch.player.getManaPool().totalMana() + " autoFailed=" + autoFailed);
+            // Unpayable: cancel (the cast rolls back). Every legal payment taps the same kind of source: let Auto pay
+            // (unless manaPayment: always). Otherwise, or once Auto has failed on this payment, the agent picks the sources.
+            if (!gui.okEnabled || plan == null || (autoFailed && sources.isEmpty())) {
                 ch.auto("forced", "mana_payment", "pay_or_else".equals(ch.kindHint) ? "cost can't be paid: payment declined" : "cost can't be paid: cast cancelled");
                 if (gui.cancelEnabled) click("cancel", game);
                 return true;
             }
-            if (sources.size() <= need || (!ch.ctx.alwaysAskMana && kinds.size() <= 1 && interchangeable)) {
+            if (!autoFailed && (sources.size() <= need || (!ch.ctx.alwaysAskMana && kinds.size() <= 1 && interchangeable))) {
                 if (sources.size() <= need) ch.auto("forced", "mana_payment", "exactly enough sources");
                 else ch.auto("policy", "mana_payment", "interchangeable sources: same-name lands, nothing attached, no counters (Forge's Auto pays)");
+                owedAtAuto = owed;
                 click("ok", game);
                 return true;
             }
@@ -803,6 +821,38 @@ final class InputDriver implements Observer, Runnable {
     /** A source whose choice can't matter beyond its name: a land with nothing attached and no counters. */
     static boolean interchangeableSource(Card c) {
         return c.isLand() && !c.isCreature() && c.getAttachedCards().isEmpty() && (c.getCounters() == null || c.getCounters().isEmpty());
+    }
+
+    /**
+     * The sources Forge's Auto button would tap, planned afresh (InputPayMana caches its plan; the methods and field are
+     * private), or null when Forge's AI payer finds no way to pay what is still owed.
+     */
+    @SuppressWarnings("unchecked")
+    private static List<Card> freshAutoPlan(Input in) {
+        try {
+            java.lang.reflect.Method invalidate = InputPayMana.class.getDeclaredMethod("invalidateAutoPayManaSources");
+            java.lang.reflect.Method ensure = InputPayMana.class.getDeclaredMethod("ensureAutoPayManaSources");
+            java.lang.reflect.Field f = InputPayMana.class.getDeclaredField("autoPayManaSources");
+            invalidate.setAccessible(true);
+            ensure.setAccessible(true);
+            f.setAccessible(true);
+            invalidate.invoke(in);
+            ensure.invoke(in);
+            return f.get(in) instanceof java.util.Collection<?> c ? new ArrayList<>((java.util.Collection<Card>) c) : null;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return List.of(); // can't plan: trust Forge's button (the Auto budget still applies)
+        }
+    }
+
+    /** What a payment input still owes, and the mana floating in the pool: both unchanged after Auto means Auto failed. */
+    private String owedKey(Input in) {
+        try {
+            java.lang.reflect.Field f = InputPayMana.class.getDeclaredField("manaCost");
+            f.setAccessible(true);
+            return f.get(in) + "|" + ch.player.getManaPool().totalMana();
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return "?";
+        }
     }
 
     /** Mana still owed by this payment input (InputPayMana.manaCost is protected). */

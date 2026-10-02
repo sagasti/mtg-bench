@@ -47,3 +47,4 @@ One file per ticket. Status: open | in progress | done | dropped.
 | [MB-041](MB-041.md) | No human baseline | medium | open |
 | [MB-042](MB-042.md) | No held-out cube condition | medium | open |
 | [MB-043](MB-043.md) | Targets outside the seat's own zones are never offered | high | done |
+| [MB-044](MB-044.md) | Mana payment presses a stale Auto forever | high | done |

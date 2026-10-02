@@ -52,7 +52,8 @@ The human-controller bridge (`engine.controller: human`, the default: `PlayerCon
 | An opponent's revealed hand is acknowledged (OK; the cards are shown with the agent's next decision) | forced | human | "revealed cards acknowledged" |
 | Mana payment with exactly enough sources | forced | both | "exactly enough sources" / "nothing to choose" |
 | Mana payment where every source is interchangeable: same-name lands, nothing attached, no counters (`event.manaPayment: smart`; `always` disables) | policy | both | "interchangeable sources: ..." |
-| Mana cost that can't be paid: the cast is cancelled (or, for "counter unless you pay", the payment is declined) | forced | human | "cost can't be paid: cast cancelled" / "cost can't be paid: payment declined" |
+| Mana cost that can't be paid (Auto disabled, or Forge's payment plan, recomputed every step, finds none): the cast is cancelled (or, for "counter unless you pay", the payment is declined) | forced | human | "cost can't be paid: cast cancelled" / "cost can't be paid: payment declined" |
+| Auto pressed ("exactly enough sources" or "interchangeable sources") but the payment didn't change: Auto isn't used again on that payment; the agent is asked for sources, or, with no source left, the cost can't be paid as above | forced | human | (the agent's question, or "cost can't be paid: ...") |
 | No creature can block | forced | human | "no creature can block" |
 | Only one legal damage split / divide split | forced | human | "only one legal split" |
 | Sideboarding between games (not implemented: decks never change) | policy | human | "no sideboarding (not implemented)" |
