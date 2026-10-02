@@ -17,7 +17,11 @@ seats:
     extraBody: { top_p: 0.9 }  # optional, merged into every request body (provider-specific knobs)
     label: "Opus (thinking)"   # optional, display name
     concurrency: 2             # optional, max model calls in flight for this seat (rate-limit guard; default no limit)
+    maxSpendUsd: 50            # optional, stop the seat once its computed cost reaches this (needs a pricing entry)
+    maxP95LatencySec: 60       # optional, stop the seat once its p95 decision latency exceeds this (after 20 decisions)
 ```
+
+**Budgets stop a seat, not the run.** Once a seat reaches `maxSpendUsd` (tokens × `pricing`, counted from the run's start) or its p95 decision latency exceeds `maxP95LatencySec`, it stays stopped: each of its remaining matches is recorded as not played (`notPlayed` in `matches.jsonl`; no games, no result for either seat, no forfeit) and the rest of the event goes on. Later draft picks and deckbuilds in other pods are rank-bot fallbacks so the pod can still draft. The check runs before each match and each decision outside games, so a match already under way finishes: a seat can overshoot by about one match's cost. report.md lists the matches not played per seat and why.
 
 **Reasoning and host are part of the seat's spec.** Reasoning counts as disabled when `extraBody.reasoning` has
 `enabled: false`, `max_tokens: 0` or `effort: "none"` (or `reasoningEffort: none`, or Anthropic without

@@ -6,6 +6,7 @@
  */
 import path from "node:path";
 import { Jsonl } from "../util/log.ts";
+import type { Pricing } from "../config.ts";
 import type { DecisionKind, Phase } from "../types.ts";
 
 export interface TokenUsage {
@@ -30,6 +31,13 @@ export function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
     reportedCostUsd: a.reportedCostUsd + b.reportedCostUsd,
     costReportedCalls: a.costReportedCalls + b.costReportedCalls,
   };
+}
+
+/** USD cost of some tokens at a model's prices (USD per 1M tokens), or null without prices. Cache prices default to 0.1× / 1.25× input. */
+export function costOf(r: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }, p?: Pricing): number | null {
+  if (!p) return null;
+  return (r.inputTokens * p.input + r.outputTokens * p.output + r.cacheReadTokens * (p.cacheRead ?? p.input * 0.1)
+    + r.cacheWriteTokens * (p.cacheWrite ?? p.input * 1.25)) / 1e6;
 }
 
 /** Decision phases, plus match notes written between games (not an in-game decision). */

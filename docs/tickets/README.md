@@ -14,7 +14,7 @@ One file per ticket. Status: open | in progress | done | dropped.
 | [MB-008](MB-008.md) | Same seed means same packs: runs aren't independent replicates | medium | done |
 | [MB-009](MB-009.md) | Cube contamination; bot-only computed hints; coarse decision kinds on the human path | medium | in progress |
 | [MB-010](MB-010.md) | No version provenance in run artifacts; bridge depends on Forge internals | medium | in progress |
-| [MB-011](MB-011.md) | Cost and wall-clock scale with the slowest, most expensive seat | medium | open |
+| [MB-011](MB-011.md) | Cost and wall-clock scale with the slowest, most expensive seat | medium | done |
 | [MB-012](MB-012.md) | Missing pieces for defensible published results | medium | open |
 | [MB-013](MB-013.md) | Mandatory targets arrive with min 0; empty answers accepted; rank-bot answers [] (root cause of MB-002's forfeits) | high | done |
 | [MB-014](MB-014.md) | A decision timeout abandons the whole match as an infrastructure error | high | done |

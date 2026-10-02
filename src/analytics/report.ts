@@ -14,7 +14,7 @@ import { podRatings, rate } from "../rating/bt.ts";
 import { cappedDrawsBySeat, censoredBySeat, outcomesFromMatches, podLabel, readMatches } from "../rating/outcomes.ts";
 import { readJsonl } from "../util/log.ts";
 import { describeProvenance, type Provenance } from "../util/provenance.ts";
-import type { CallRecord, DecisionRecord } from "./recorder.ts";
+import { type CallRecord, costOf, type DecisionRecord } from "./recorder.ts";
 
 /** Row fields newer runs add (absent in older runs). */
 type DecisionRow = DecisionRecord & { infraError?: boolean; timedOut?: boolean; specViolation?: unknown; attempt?: number };
@@ -30,12 +30,6 @@ interface Agg {
 const newAgg = (): Agg => ({ decisions: 0, autoResolved: 0, modelCalls: 0, apiErrors: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0,
   cacheWriteTokens: 0, reasoningTokens: 0, invalidAttempts: 0, fallbacks: 0, latencies: [], tools: {}, cost: 0, reportedCost: 0, costReportedCalls: 0, forfeits: 0,
   reasks: 0, infraErrors: 0, truncated: 0 });
-
-export function costOf(r: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }, p?: Pricing): number | null {
-  if (!p) return null;
-  return (r.inputTokens * p.input + r.outputTokens * p.output + r.cacheReadTokens * (p.cacheRead ?? p.input * 0.1)
-    + r.cacheWriteTokens * (p.cacheWrite ?? p.input * 1.25)) / 1e6;
-}
 
 /**
  * Decision counts, validity, latency and tool use come from decision rows. A decision abandoned by an infrastructure
@@ -177,6 +171,13 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
   const byPod = podRatings(outcomes);
   const cappedDraws = cappedDrawsBySeat(matches);
   const censored = censoredBySeat(matches);
+  // Matches skipped because a seat was over its budget: per seat that went over (why) and per seat that lost the match.
+  const overBudget = new Map<string, string>();
+  const notPlayed = new Map<string, number>();
+  for (const m of matches) if (m.notPlayed) {
+    overBudget.set(m.notPlayed.seat, m.notPlayed.reason);
+    for (const seat of m.seats) notPlayed.set(seat, (notPlayed.get(seat) ?? 0) + 1);
+  }
   const games = matches.flatMap((m) => m.games);
   const reasons: Record<string, number> = {};
   for (const g of games) reasons[g.reason.split(":")[0]] = (reasons[g.reason.split(":")[0]] ?? 0) + 1;
@@ -238,7 +239,7 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
     for (const e of m.engineErrors ?? []) add(engineErrors, `${e.kind} at ${e.at || "?"}`);
   }
 
-  return { incomplete, versions, specViolations, decisions, calls, unrecorded, matches, bySeat, bySeatPhase, byKind, ratings, byPod, merged: runDirs.length > 1, cappedDraws, censored, games, reasons, delegated, forfeited, provenance, engineErrors, matchesWithEngineErrors, playWinRate: decided.length ? playWins / decided.length : null, pricing };
+  return { incomplete, versions, specViolations, decisions, calls, unrecorded, matches, bySeat, bySeatPhase, byKind, ratings, byPod, merged: runDirs.length > 1, cappedDraws, censored, overBudget, notPlayed, games, reasons, delegated, forfeited, provenance, engineErrors, matchesWithEngineErrors, playWinRate: decided.length ? playWins / decided.length : null, pricing };
 }
 
 export function renderReport(s: ReturnType<typeof summarize>, title: string): string {
@@ -276,6 +277,12 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
     L.push(`**Errored matches: ${sum("replayed")} replayed, ${sum("matches")} censored.** A match that errors for a reason other than a harness bug (provider error, match timeout, bridge crash) is played again from scratch with the same decks and seed at the end of its round (${replays.filter((m) => !m.error).length} of ${replays.length} replay(s) completed). A match whose replay errors too, or that hit a harness bug, is censored: left out of the ratings and standings entirely, including the games it finished (policy in docs/ANALYTICS.md). Errors cut off long matches, so a seat with many censored matches may be rated on a biased sample.`, "");
     L.push("| Seat | Replayed | Censored matches | Finished games left out |", "|---|---|---|---|");
     for (const [seat, c] of [...s.censored.entries()].sort()) L.push(`| ${seat} | ${c.replayed} | ${c.matches} | ${c.games} |`);
+    L.push("");
+  }
+  if (s.notPlayed.size) {
+    L.push(`**Not played: ${s.matches.filter((m) => m.notPlayed).length} match(es)**, because a seat went over its budget (\`maxSpendUsd\` / \`maxP95LatencySec\`): ${[...s.overBudget.entries()].map(([seat, why]) => `${seat} (${why})`).join("; ")}. A match not played has no result for either seat (no forfeit) and isn't in the ratings or standings; an over-budget seat's later draft picks and decks are rank-bot fallbacks.`, "");
+    L.push("| Seat | Matches not played |", "|---|---|");
+    for (const [seat, n] of [...s.notPlayed.entries()].sort()) L.push(`| ${seat} | ${n} |`);
     L.push("");
   }
 
@@ -416,6 +423,8 @@ export function writeReport(runDir: string, cfg?: BenchConfig) {
     ratings: s.ratings,
     podRatings: s.byPod.pods.length > 1 ? { pods: s.byPod.pods.map((p) => podLabel(p, s.merged)), ratings: Object.fromEntries(s.byPod.ratings), sdBetweenPods: Object.fromEntries(s.byPod.sd) } : undefined,
     cappedDraws: Object.fromEntries(s.cappedDraws),
+    overBudget: s.overBudget.size ? Object.fromEntries(s.overBudget) : undefined,
+    notPlayed: s.notPlayed.size ? Object.fromEntries(s.notPlayed) : undefined,
     censored: Object.fromEntries(s.censored),
     seats: Object.fromEntries([...s.bySeat.entries()].map(([id, a]) => [id, { ...a, latencies: undefined, p50LatencyMs: pct(a.latencies, 0.5), p95LatencyMs: pct(a.latencies, 0.95) }])),
     games: s.games.length, reasons: s.reasons, playWinRate: s.playWinRate,

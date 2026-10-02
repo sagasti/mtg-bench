@@ -65,6 +65,8 @@ export interface MatchResult {
   errorKind?: "infra" | "timeout" | "bridge" | "harness";
   /** This match replays the errored match with this id: same seats, decks and seed, played from scratch. */
   replayOf?: string;
+  /** Not played because a seat was over its spend/latency budget (SeatConfig.maxSpendUsd): no games, no result for either seat. */
+  notPlayed?: { seat: string; reason: string };
   /** The run the row was read from (set by readMatches), so matches of different runs never share a bootstrap cluster. */
   runId?: string;
 }

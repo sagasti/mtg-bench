@@ -36,6 +36,14 @@ export interface SeatConfig {
   headers?: Record<string, string>;
   /** Max concurrent in-flight model calls for this seat (rate-limit guard); unset = no limit. Queue time isn't charged to the agent. */
   concurrency?: number;
+  /**
+   * Budgets. Once the seat's computed cost (tokens × `pricing`) reaches maxSpendUsd, or the p95 of its decision latency
+   * exceeds maxP95LatencySec (over at least 20 decisions), its remaining matches aren't played (recorded as not played,
+   * no result for either seat) and any later draft picks and deckbuilds are rank-bot fallbacks. Checked before each
+   * match and decision outside games, so a match in progress finishes. Unset = no limit.
+   */
+  maxSpendUsd?: number;
+  maxP95LatencySec?: number;
   /** Per-seat overrides of event.maxToolCallsPerDecision etc. are deliberately NOT allowed: same rules for everyone. */
 }
 
@@ -150,6 +158,8 @@ export function validateConfig(cfg: BenchConfig) {
     if (llm && !s.model) errs.push(`${where}: model is required for provider ${s.provider}`);
     if (llm && !s.apiKeyEnv && !s.baseUrl) errs.push(`${where}: apiKeyEnv is required for provider ${s.provider}`);
     if (s.concurrency !== undefined && !(Number.isInteger(s.concurrency) && s.concurrency > 0)) errs.push(`${where}: concurrency must be a positive integer`);
+    for (const k of ["maxSpendUsd", "maxP95LatencySec"] as const) if (s[k] !== undefined && !(typeof s[k] === "number" && s[k]! > 0)) errs.push(`${where}: ${k} must be a positive number`);
+    if (s.maxSpendUsd !== undefined && !cfg.pricing[s.model ?? s.provider]) errs.push(`${where}: maxSpendUsd needs a pricing entry for model ${s.model ?? s.provider}`);
     if ((s as any).apiKey) errs.push(`${where}: put the key in an env var and reference it with apiKeyEnv, not apiKey`);
   }
   if (cfg.event.packs * cfg.event.packSize * podSize > 100000) errs.push("pod is unreasonably large");

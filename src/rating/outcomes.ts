@@ -12,7 +12,7 @@ import type { Outcome } from "./bt.ts";
 export function outcomesFromMatches(matches: MatchResult[], level: "game" | "match" = "game"): Outcome[] {
   const out: Outcome[] = [];
   for (const m of matches) {
-    if (m.error) continue;
+    if (m.error || m.notPlayed) continue;
     const cluster = `${m.runId ?? ""}/${m.matchId}`;
     const pod = podKey(m);
     if (level === "match") {

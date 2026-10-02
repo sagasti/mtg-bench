@@ -74,7 +74,9 @@ export async function runHeadToHead(cfg: BenchConfig, engine: GameEngine, opts: 
   const seeds = Array.from({ length: opts.matches }, (_, m) => rng.fork(`h2h-${m + 1}`).int(2 ** 31));
   const playOne = async (m: number, matchId: string, replayOf?: string) => {
     let res: MatchResult;
-    try {
+    const stopped = seats.map((s) => ({ seat: s.id, reason: s.overBudget() })).find((x) => x.reason);
+    if (stopped) res = { matchId, pod: 0, round: m + 1, seats: [seats[0].id, seats[1].id], games: [], winner: null, notPlayed: { seat: stopped.seat, reason: stopped.reason! } };
+    else try {
       res = await engine.playMatch({
         matchId, pod: 0, round: m + 1, seats, decks, deckFiles: dckFiles, gamesPerMatch: ev.gamesPerMatch,
         seed: seeds[m], maxGameTurns: ev.maxGameTurns, runDir,
@@ -86,7 +88,7 @@ export async function runHeadToHead(cfg: BenchConfig, engine: GameEngine, opts: 
     if (replayOf) res.replayOf = replayOf;
     matchLog.write(res);
     const score = res.games.map((g) => (g.winner === 0 ? "W" : g.winner === 1 ? "L" : "D")).join("");
-    const outcome = res.error ? (replayOf || !replayable(res) ? "censored" : "errored, replaying at the end") : res.winner === 0 ? seats[0].id : res.winner === 1 ? seats[1].id : "draw";
+    const outcome = res.notPlayed ? `not played, ${res.notPlayed.seat} over budget` : res.error ? (replayOf || !replayable(res) ? "censored" : "errored, replaying at the end") : res.winner === 0 ? seats[0].id : res.winner === 1 ? seats[1].id : "draw";
     info(`  match ${m + 1}${replayOf ? " (replay)" : ""}: ${outcome} (${score})${res.error ? ` ERROR ${res.error}` : ""}`);
     return res;
   };

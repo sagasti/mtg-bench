@@ -122,6 +122,7 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
     const n = order.length;
     const points = new Array(n).fill(0);
     const censored = new Array(n).fill(0); // errored matches: no points for either seat
+    const notPlayed = new Array(n).fill(0); // a seat was over budget: no points either
     const played = new Set<string>();
     const nRounds = ev.format === "round-robin" ? n - 1 : ev.rounds;
     const rr = ev.format === "round-robin" ? roundRobin(n) : null;
@@ -131,7 +132,9 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
       if (rematches) info(`round ${round + 1}: no pairing without rematches; ${rematches} rematch(es)`);
       const playOne = async (a: number, b: number, matchId: string, seed: number, replayOf?: string) => {
         let res: MatchResult;
-        try {
+        const stopped = [order[a], order[b]].map((s) => ({ seat: s.id, reason: s.overBudget() })).find((x) => x.reason);
+        if (stopped) res = { matchId, pod, round: round + 1, seats: [order[a].id, order[b].id], games: [], winner: null, notPlayed: { seat: stopped.seat, reason: stopped.reason! } };
+        else try {
           res = await engine.playMatch({
             matchId, pod, round: round + 1, seats: [order[a], order[b]], decks: [decks[a], decks[b]],
             deckFiles: [deckFiles[a], deckFiles[b]], gamesPerMatch: ev.gamesPerMatch, seed,
@@ -144,7 +147,8 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
         matchLog.write(res);
         allMatches.push(res);
         const score = res.games.map((g) => (g.winner === 0 ? "W" : g.winner === 1 ? "L" : "D")).join("");
-        const outcome = res.error ? (replayOf || !replayable(res) ? "censored" : "errored, replaying at the end of the round") : res.winner === 0 ? order[a].id : res.winner === 1 ? order[b].id : "draw";
+        const outcome = res.notPlayed ? `not played, ${res.notPlayed.seat} over budget` : res.error ? (replayOf || !replayable(res) ? "censored" : "errored, replaying at the end of the round")
+          : res.winner === 0 ? order[a].id : res.winner === 1 ? order[b].id : "draw";
         info(`  r${round + 1} ${order[a].id} vs ${order[b].id}${replayOf ? " (replay)" : ""}: ${outcome} (${score})${res.error ? ` ERROR ${res.error}` : ""}`);
         return { res, a, b, seed };
       };
@@ -159,11 +163,12 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
       const results = first.map((r) => replays.find((x) => x.res.replayOf === r.res.matchId) ?? r);
       for (const { res, a, b } of results) {
         played.add(a < b ? `${a}-${b}` : `${b}-${a}`);
-        if (res.error) { censored[a]++; censored[b]++; }
+        if (res.notPlayed) { notPlayed[a]++; notPlayed[b]++; }
+        else if (res.error) { censored[a]++; censored[b]++; }
         else if (res.winner === 0) points[a] += 3; else if (res.winner === 1) points[b] += 3; else { points[a] += 1; points[b] += 1; }
       }
     }
-    recorder.event("pod_end", { pod, standings: order.map((s, i) => ({ seat: s.id, points: points[i], ...(censored[i] ? { censored: censored[i] } : {}) })).sort((x, y) => y.points - x.points) });
+    recorder.event("pod_end", { pod, standings: order.map((s, i) => ({ seat: s.id, points: points[i], ...(censored[i] ? { censored: censored[i] } : {}), ...(notPlayed[i] ? { notPlayed: notPlayed[i] } : {}) })).sort((x, y) => y.points - x.points) });
   }
 
   const ratings = rate(outcomesFromMatches(allMatches), { bootstrap: 500, seed: ev.seed });
