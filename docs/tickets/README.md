@@ -48,3 +48,4 @@ One file per ticket. Status: open | in progress | done | dropped.
 | [MB-042](MB-042.md) | No held-out cube condition | medium | open |
 | [MB-043](MB-043.md) | Targets outside the seat's own zones are never offered | high | done |
 | [MB-044](MB-044.md) | Mana payment presses a stale Auto forever | high | done |
+| [MB-045](MB-045.md) | An unbounded number prompt floods the harness until it runs out of heap | high | done |
