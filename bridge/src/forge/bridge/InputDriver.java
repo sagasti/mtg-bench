@@ -688,7 +688,7 @@ final class InputDriver implements Observer, Runnable {
             List<PlayerControllerExternal.Opt> two = new ArrayList<>();
             if (gui.okEnabled) two.add(new PlayerControllerExternal.Opt(yes, "Button: " + gui.okLabel, null));
             if (gui.cancelEnabled) two.add(new PlayerControllerExternal.Opt(no, "Button: " + gui.cancelLabel, null));
-            List<String> r = ch.ask(kind, prompt, two, 1, 1, null);
+            List<String> r = ch.ask(kind, prompt, two, 1, 1, yesNo ? ch.confirmHints : null);
             String pick = r == null || r.isEmpty() ? (gui.cancelEnabled ? no : yes) : r.get(0);
             click(pick.equals(yes) ? "ok" : "cancel", game);
             return true;

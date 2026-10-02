@@ -55,6 +55,7 @@ The human-controller bridge (`engine.controller: human`, the default: `PlayerCon
 | Mana cost that can't be paid (Auto disabled, or Forge's payment plan, recomputed every step, finds none): the cast is cancelled (or, for "counter unless you pay", the payment is declined) | forced | human | "cost can't be paid: cast cancelled" / "cost can't be paid: payment declined" |
 | Auto pressed ("exactly enough sources" or "interchangeable sources") but the payment didn't change: Auto isn't used again on that payment; the agent is asked for sources, or, with no source left, the cost can't be paid as above | forced | human | (the agent's question, or "cost can't be paid: ...") |
 | No creature can block | forced | human | "no creature can block" |
+| A game in an unbreakable loop (the same state at priority, stack not empty, 20 times in one turn) is ended as a draw; see below | policy | both | "unbreakable loop: the same game state recurred 20 times in one turn; game drawn" (what `game_end`, both seats) |
 | Only one legal damage split / divide split | forced | human | "only one legal split" |
 | Sideboarding between games (not implemented: decks never change) | policy | human | "no sideboarding (not implemented)" |
 | Order of cards put on the bottom by scry-like effects (kept as given) | policy | human | "order of cards put on the bottom unchanged" |
@@ -99,6 +100,17 @@ The human-controller bridge (`engine.controller: human`, the default: `PlayerCon
 A game still running after `event.maxGameTurns` turns (both players' turns counted) is ended as a draw by the bridge,
 for every kind of seat, with the end reason "Draw (turn cap of N turns)". It isn't a decision and isn't attributed to
 a seat.
+
+## Games in an unbreakable loop
+
+In the spirit of MTR 4.4 (a loop no player will stop is ended by a judge), the bridge ends a game as a draw for both
+players when the same game state recurs at priority, with something on the stack, `LoopGuard.LOOP_REPEATS` (20) times
+in one turn: end reason "Draw (unbreakable loop)". The state compared is public: turn, phase, who has priority, each
+player's life, poison, zone sizes and floating mana, every permanent (tapped, counters, damage, power/toughness) and
+the stack (sources by name, abilities, targets). The rule applies to every kind of seat and doesn't depend on any
+bot's behaviour. It's recorded as policy for both seats (`game_end`), and report.md counts these draws per seat next
+to turn-cap draws ("Unbreakable-loop draws"); in the ratings a drawn game counts half a win for each seat, as at the
+turn cap. Found with rank-bot and Forge's AI copying Chain of Smog back and forth with empty hands (MB-046).
 
 ## Bot-only hints
 

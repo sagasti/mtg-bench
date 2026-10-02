@@ -49,3 +49,5 @@ One file per ticket. Status: open | in progress | done | dropped.
 | [MB-043](MB-043.md) | Targets outside the seat's own zones are never offered | high | done |
 | [MB-044](MB-044.md) | Mana payment presses a stale Auto forever | high | done |
 | [MB-045](MB-045.md) | An unbounded number prompt floods the harness until it runs out of heap | high | done |
+| [MB-046](MB-046.md) | An unbreakable loop runs until the match timeout | medium | done |
+| [MB-047](MB-047.md) | rank-bot accepts pointless optional copies | medium | done |

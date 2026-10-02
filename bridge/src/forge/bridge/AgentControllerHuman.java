@@ -3,20 +3,25 @@ package forge.bridge;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Supplier;
 
 import org.apache.commons.lang3.tuple.ImmutablePair;
+
+import com.google.gson.JsonObject;
 
 import forge.LobbyPlayer;
 import forge.ai.ComputerUtilCost;
 import forge.game.Game;
 import forge.game.GameActionUtil;
+import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
 import forge.game.card.CardCollectionView;
 import forge.game.cost.Cost;
 import forge.game.keyword.Keyword;
 import forge.game.player.Player;
+import forge.game.player.PlayerActionConfirmMode;
 import forge.game.spellability.OptionalCostValue;
 import forge.game.spellability.SpellAbility;
 import forge.player.PlayerControllerHuman;
@@ -81,6 +86,27 @@ public class AgentControllerHuman extends PlayerControllerHuman {
             ch.auto("policy", "optional_costs", "optional cost not offered: the affordability probe says it can't be paid now");
         if (offered.isEmpty()) return new ArrayList<>();
         return as("optional_costs", () -> super.chooseOptionalCosts(chosen, offered));
+    }
+
+    /**
+     * A yes/no question about an optional effect: bot-only tags for it (rank-bot reads them; LLM prompts show labels
+     * only). "api" is the effect; for a copy of a spell, "copies" is the copied spell's effect (Chain of Smog: Discard).
+     */
+    @Override
+    public boolean confirmAction(SpellAbility sa, PlayerActionConfirmMode mode, String message, List<String> options, Card cardToShow, Map<String, Object> params) {
+        JsonObject tags = new JsonObject();
+        if (sa != null && sa.getApi() != null) {
+            tags.addProperty("api", sa.getApi().name());
+            SpellAbility root = sa.getRootAbility();
+            if (sa.getApi() == ApiType.CopySpellAbility && root != sa && root.getApi() != null) tags.addProperty("copies", root.getApi().name());
+        }
+        JsonObject before = ch.confirmHints;
+        ch.confirmHints = tags;
+        try {
+            return super.confirmAction(sa, mode, message, options, cardToShow, params);
+        } finally {
+            ch.confirmHints = before;
+        }
     }
 
     @Override

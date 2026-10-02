@@ -19,7 +19,7 @@ export interface Bot { choose(req: DecisionRequest): DecisionResponse }
  * request `hints`, produced by the bridge's botTags / PlayerControllerExternal): its ratings then measure a different
  * player, and `report` / `rate` refuse to pool runs whose anchors differ (MB-002).
  */
-export const BOT_VERSIONS: Record<string, string> = { random: "v1", "rank-bot": "v2", "forge-ai": "v1" };
+export const BOT_VERSIONS: Record<string, string> = { random: "v1", "rank-bot": "v3", "forge-ai": "v1" };
 
 /**
  * The anchor a bot seat plays as, e.g. "rank-bot@human-v2": provider, the path that feeds it tags (mock engine, or the
@@ -131,6 +131,14 @@ export class RankBot implements Bot {
         return { choice: req.options.map((o) => o.id) };
       case "play_draw":
         return { choice: [req.options.find((o) => o.id === "yes")?.id ?? req.options[0].id] };
+      case "confirm": {
+        // Optional effects: yes, unless it is pointless. Copying a discard spell at an opponent with an empty hand
+        // does nothing, and invites the copy back (Chain of Smog, MB-047).
+        const opponentHand = Number((req.state as any)?.opponent?.handSize ?? 1);
+        const pointless = req.hints?.api === "CopySpellAbility" && req.hints?.copies === "Discard" && opponentHand === 0;
+        const want = pointless ? "no" : "yes";
+        return { choice: [req.options.find((o) => o.id === want)?.id ?? req.options[0].id] };
+      }
       case "london_bottom":
       case "discard": {
         const sorted = [...req.options].sort((a, b) => this.score(a.card) - this.score(b.card));
