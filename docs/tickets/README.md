@@ -33,3 +33,12 @@ One file per ticket. Status: open | in progress | done | dropped.
 | [MB-027](MB-027.md) | Swiss pairing can dead-end and crash the event; crashed runs report as complete | medium | open |
 | [MB-028](MB-028.md) | --pools-from restores post-deckbuild notes before re-running deckbuild | low | open |
 | [MB-029](MB-029.md) | Loaded decks are never validated | low | open |
+| [MB-030](MB-030.md) | 'End Turn' / 'Undo' buttons at priority silently yield the rest of the turn | high | open |
+| [MB-031](MB-031.md) | Attack retries never reach the budget and re-asks invert the agent's choice | high | open |
+| [MB-032](MB-032.md) | Forfeits on mandatory selections press OK with fewer than min picks | high | open |
+| [MB-033](MB-033.md) | Reveals are turned into agent decisions | medium | open |
+| [MB-034](MB-034.md) | manaPayment: always is ignored on the human path | medium | open |
+| [MB-035](MB-035.md) | The forfeit null action on yes/no questions is 'Yes' | medium | open |
+| [MB-036](MB-036.md) | Every Forge notification is shown to the agent as a rejection of its last choice | medium | open |
+| [MB-037](MB-037.md) | Block retries can only add blockers, never remove them | medium | open |
+| [MB-038](MB-038.md) | An exception in step() re-drives the same input forever | low | open |
