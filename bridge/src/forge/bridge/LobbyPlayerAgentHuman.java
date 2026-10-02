@@ -22,9 +22,9 @@ public class LobbyPlayerAgentHuman extends LobbyPlayerHuman {
     @Override
     public Player createIngamePlayer(Game game, int id) {
         Player player = new Player(getName(), game, id); // neutral name: no "personalized" human name
-        PlayerControllerHuman controller = new PlayerControllerHuman(game, player, this);
         AgentChannel ch = new AgentChannel(client, ctx, seat);
         ch.player = player;
+        PlayerControllerHuman controller = new AgentControllerHuman(game, player, this, ch);
         AgentGuiGame gui = new AgentGuiGame(ch);
         gui.setGameView(game.getView());
         controller.setGui(gui);

@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 
+import com.google.common.eventbus.Subscribe;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
@@ -22,6 +23,7 @@ import forge.game.GameOutcome;
 import forge.game.GameRules;
 import forge.game.GameType;
 import forge.game.Match;
+import forge.game.event.GameEventPlayerPriority;
 import forge.game.player.Player;
 import forge.game.player.RegisteredPlayer;
 import forge.gui.GuiBase;
@@ -81,6 +83,8 @@ public final class AgentBridge {
                 ctx.game = g;
                 Game game = match.createGame();
                 game.setNoGUIUser();
+                TurnCap cap = new TurnCap(game, ctx.maxTurns);
+                game.subscribeToEvents(cap);
                 JsonObject start = new JsonObject();
                 start.addProperty("type", "game_start");
                 start.addProperty("game", g);
@@ -103,7 +107,8 @@ public final class AgentBridge {
                 Player starter = game.getStartingPlayer();
                 if (starter != null) end.addProperty("onThePlay", starter.getLobbyPlayer().equals(lobby[0]) ? 0 : 1);
                 end.addProperty("turns", out != null ? out.getLastTurnNumber() : game.getPhaseHandler().getTurn());
-                end.addProperty("reason", error != null ? "error: " + error : out != null ? String.valueOf(out.getWinCondition()) : "unknown");
+                end.addProperty("reason", error != null ? "error: " + error : cap.reached ? "Draw (turn cap of " + ctx.maxTurns + " turns)"
+                        : out != null ? String.valueOf(out.getWinCondition()) : "unknown");
                 // Full Forge game log, chronological, for offline review. The harness writes it to a file; it never reaches agents.
                 JsonArray log = new JsonArray();
                 for (GameLogEntry e : game.getGameLog().getAllEntries()) log.add(e.type() + ": " + e.message());
@@ -145,5 +150,30 @@ public final class AgentBridge {
             client.close();
         }
         System.exit(exit);
+    }
+
+    /**
+     * The game is a draw once it passes maxGameTurns (total turns, both players). Checked whenever a player would get
+     * priority, on the game thread, for every kind of seat: Forge then sees the game over at its next state-based check.
+     */
+    static final class TurnCap {
+        private final Game game;
+        private final int maxTurns;
+        volatile boolean reached = false;
+
+        TurnCap(Game game, int maxTurns) {
+            this.game = game;
+            this.maxTurns = maxTurns;
+        }
+
+        @Subscribe
+        public void onPriority(GameEventPlayerPriority e) {
+            if (maxTurns > 0 && game.getPhaseHandler().getTurn() > maxTurns && !game.isGameOver()) {
+                reached = true;
+                // Without an outcome, setGameOver counts every remaining player as a winner.
+                for (Player p : game.getPlayers()) p.intentionalDraw();
+                game.setGameOver(GameEndReason.Draw);
+            }
+        }
     }
 }
