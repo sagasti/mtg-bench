@@ -68,3 +68,17 @@ Go. With mitigations 1 and 2 the human path matches the old path on decisions, c
 fewer invalid answers, no hand-written legality layer, and Forge's own prompts. Remaining before it becomes the
 default: replace the spike defaults with real decisions (item 3), rebuild bot tags (item 4), validate on a larger
 sample (a full bots event plus several DeepSeek matches), then remove PlayerControllerExternal and AgentCostDecision.
+
+## Update 2026-10-02: bridge review fixes (MB-002, MB-005, MB-007, MB-009, MB-013, MB-030..MB-038)
+- **Helper buttons are never offered.** "End Turn" / "Undo" at priority (Forge then passed every later priority of
+  the turn and skipped the attack, unrecorded), "End Turn" on an opponent's revealed hand (now acknowledged as
+  forced), "Auto" on the London mulligan (the agent now picks the bottom cards) and "Alpha Strike" / "Call Back".
+- **Item 4 done: bot tags rebuilt.** `InputDriver.botTags` and the mulligan input produce what `rank-bot` reads:
+  `type`/`cmc`/`sorcerySpeedOk` at priority, `keep` + `handLands`/`handSize` for mulligans, `hostile` on targets and
+  card lists, plus the existing attack/block tags. Targeting prompts carry the ability's real bounds.
+- **Attacks and blocks** undo the seat's earlier declarations before each ask and are checked with Forge's own
+  validation before OK; retries are counted per combat step. **Forfeits** never press a disabled OK.
+- **Turn cap** enforced for every seat (draw, "Draw (turn cap of N turns)"). Notifications and reveals are shown
+  as information, not as rejections or questions. Decision kinds on this path now follow `src/types.ts`
+  (play_draw, london_bottom, discard, scry, cost_choice, pay_or_else, confirm, choose_color...).
+See docs/DECISION-PROVENANCE.md for the recorded reasons.

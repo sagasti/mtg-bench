@@ -42,7 +42,7 @@ with cwd = the Forge install. The bridge connects back and exchanges JSON lines:
 |---|---|
 | bridge → harness | `{"type":"hello","token":T}` (first line; wrong token ⇒ connection dropped) |
 | bridge → harness | `{"type":"game_start","game":1}` |
-| bridge → harness | `{"type":"decision","rid":7,"seat":0,"game":1,"kind":"blockers","prompt":…,"state":{…},"options":[…],"min":0,"max":3,"hints":{…}}` |
+| bridge → harness | `{"type":"decision","rid":7,"seat":0,"game":1,"kind":"blockers","prompt":…,"state":{…},"options":[…],"min":0,"max":3,"hints":{…},"attempt":0}` (`attempt`: 0 for the first ask of an in-game step, 1, 2… for re-asks of the same step after Forge rejected the answer) |
 | harness → bridge | `{"type":"answer","rid":7,"choice":["c41->c17"]}` |
 | bridge → harness | `{"type":"game_end","game":1,"winner":0,"onThePlay":1,"turns":11,"reason":"LifeReachedZero"}` (`winner` omitted = draw) |
 | bridge → harness | `{"type":"match_end"}` |
