@@ -15,6 +15,8 @@ import path from "node:path";
 import { summarize, renderReport } from "./analytics/report.ts";
 import { AnthropicProvider } from "./agents/providers/anthropic.ts";
 import { OpenAIProvider } from "./agents/providers/openai.ts";
+import { checkSeatSpec } from "./agents/llm.ts";
+import { promptFile } from "./agents/render.ts";
 import { buildIndex, loadDb, saveIndex } from "./cards/db.ts";
 import { loadCube, parseCardList } from "./cards/cube.ts";
 import { loadConfig, missingKeys } from "./config.ts";
@@ -82,7 +84,7 @@ async function main() {
       if (rules) ok(`Comprehensive Rules loaded (${rules.size} entries)`);
       else if (cfg.event.knowledge.startsWith("oracle+tools")) problems.push("data/MagicCompRules.txt missing: search_rules will answer 'not available' (see data/README.md)");
       for (const f of ["system.md", "draft.md", "deckbuild.md", "game.md", `knowledge-${cfg.event.knowledge}.md`]) {
-        if (!fs.existsSync(path.resolve("prompts", cfg.event.promptVersion, f))) problems.push(`prompt file prompts/${cfg.event.promptVersion}/${f} missing`);
+        if (!fs.existsSync(promptFile(cfg.event.promptVersion, f))) problems.push(`prompt file prompts/${cfg.event.promptVersion}/${f} missing`);
       }
       console.log("Engine");
       if (cfg.engine.type === "forge") {
@@ -98,7 +100,9 @@ async function main() {
           try {
             const p = s.provider === "anthropic" ? new AnthropicProvider(s) : new OpenAIProvider(s);
             const t = await p.complete({ system: "You are a test.", messages: [{ role: "user", content: "Call submit_decision with choice [\"o1\"]." }], tools: [SUBMIT_TOOL] });
-            ok(`${s.id}: ${t.toolCalls.length ? `tool call ${t.toolCalls[0].name}(${JSON.stringify(t.toolCalls[0].input)})` : `text "${t.text.slice(0, 60)}"`} · in ${t.usage.inputTokens}+${t.usage.cacheReadTokens} out ${t.usage.outputTokens}`);
+            ok(`${s.id}: ${t.toolCalls.length ? `tool call ${t.toolCalls[0].name}(${JSON.stringify(t.toolCalls[0].input)})` : `text "${t.text.slice(0, 60)}"`} · in ${t.usage.inputTokens}+${t.usage.cacheReadTokens} out ${t.usage.outputTokens} (reasoning ${t.usage.reasoningTokens})${t.servedBy ? ` · served by ${t.servedBy}` : ""}`);
+            const violation = checkSeatSpec(s, t);
+            if (violation) problems.push(`${s.id}: seat spec broken: ${violation}`);
           } catch (e: any) { problems.push(`${s.id}: ${e.message}`); }
         }
       }

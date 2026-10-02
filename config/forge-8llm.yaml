@@ -52,53 +52,65 @@ pricing:
   openai/gpt-6-luna: { input: 0.100, output: 0.500, cacheRead: 0.0100 }
   z-ai/glm-5.3-flash: { input: 0.150, output: 0.500, cacheRead: 0.0300 }
   mistralai/mistral-small-2603: { input: 0.150, output: 0.600, cacheRead: 0.0150 }
-# All eight seats are LLMs; reasoning is disabled everywhere so output tokens stay comparable and predictable.
+# All eight seats are LLMs. Each seat's reasoning regime and host are part of the event spec, and every call is checked
+# against it (a breach is warned about and marked `specViolation` in usage.jsonl / decisions.jsonl; `check --ping`
+# checks one call per seat):
+#   - reasoning off wherever the endpoint allows it; gpt-oss-120b, gpt-5-nano and glm-5.3-flash refuse, so `effort: low`.
+#   - host pinned with provider.order + allow_fallbacks: false. Hosts are the ones that served most calls in the
+#     runs/sanity-* games (2026-10-02; DeepSeek from full-llm-1). The slugs are inferred from OpenRouter's display
+#     names (servedBy) and must be confirmed with `check --ping` before the paid run.
+#   - maxTokens (reasoning and the answer share it): 4096 with reasoning off, 16384 with it on (src/config.ts maxTokensFor).
 seats:
   - id: deepseek-flash
     provider: openrouter
     model: deepseek/deepseek-v4-flash
     apiKeyEnv: OPENROUTER_API_KEY
-    maxTokens: 2048
-    extraBody: { reasoning: { enabled: false }, provider: { order: [baidu], allow_fallbacks: false } }
+    maxTokens: 4096
+    extraBody: { reasoning: { enabled: false }, provider: { order: [baidu], allow_fallbacks: false } }   # Baidu 1730/1730 calls
   - id: qwen-flash
     provider: openrouter
     model: qwen/qwen3.7-flash
     apiKeyEnv: OPENROUTER_API_KEY
-    maxTokens: 2048
-    extraBody: { reasoning: { enabled: false } }
+    maxTokens: 4096
+    extraBody: { reasoning: { enabled: false }, provider: { order: [alibaba], allow_fallbacks: false } }   # Alibaba 125/125
   - id: gpt-oss-120b
     provider: openrouter
     model: openai/gpt-oss-120b
     apiKeyEnv: OPENROUTER_API_KEY
-    maxTokens: 2048
-    extraBody: { reasoning: { effort: low } }   # this endpoint refuses to disable reasoning; lowest effort instead
+    maxTokens: 16384
+    # This endpoint refuses to disable reasoning; lowest effort instead. AkashML 98/108 (DeepInfra 8, Mancer 2).
+    extraBody: { reasoning: { effort: low }, provider: { order: [akashml], allow_fallbacks: false } }
   - id: gpt-5-nano
     provider: openrouter
     model: openai/gpt-5-nano
     apiKeyEnv: OPENROUTER_API_KEY
-    maxTokens: 2048
-    extraBody: { reasoning: { effort: low } }   # this endpoint refuses to disable reasoning; lowest effort instead
+    maxTokens: 16384
+    # This endpoint refuses to disable reasoning; lowest effort instead. OpenAI 67/67.
+    extraBody: { reasoning: { effort: low }, provider: { order: [openai], allow_fallbacks: false } }
   - id: gemini-flash-lite
     provider: openrouter
     model: google/gemini-2.5-flash-lite
     apiKeyEnv: OPENROUTER_API_KEY
-    maxTokens: 2048
-    extraBody: { reasoning: { enabled: false } }
+    maxTokens: 4096
+    # `enabled: false` was ignored (256k reasoning tokens in the sanity game). max_tokens maps to Gemini's thinkingBudget,
+    # and a budget of 0 turns thinking off on 2.5 Flash / Flash-Lite. "Google" 320/320 = Vertex.
+    extraBody: { reasoning: { max_tokens: 0 }, provider: { order: [google-vertex], allow_fallbacks: false } }
   - id: gpt-6-luna
     provider: openrouter
     model: openai/gpt-6-luna
     apiKeyEnv: OPENROUTER_API_KEY
-    maxTokens: 2048
-    extraBody: { reasoning: { enabled: false } }
+    maxTokens: 4096
+    extraBody: { reasoning: { enabled: false }, provider: { order: [openai], allow_fallbacks: false } }   # OpenAI 68/68
   - id: glm-flash
     provider: openrouter
     model: z-ai/glm-5.3-flash
     apiKeyEnv: OPENROUTER_API_KEY
-    maxTokens: 2048
-    extraBody: { reasoning: { effort: low } }   # this endpoint refuses to disable reasoning; lowest effort instead
+    maxTokens: 16384
+    # This endpoint refuses to disable reasoning; lowest effort instead. Relace 34/80 (Together 18, StreamLake 17, 4 others).
+    extraBody: { reasoning: { effort: low }, provider: { order: [relace], allow_fallbacks: false } }
   - id: mistral-small
     provider: openrouter
     model: mistralai/mistral-small-2603
     apiKeyEnv: OPENROUTER_API_KEY
-    maxTokens: 2048
-    extraBody: { reasoning: { enabled: false } }
+    maxTokens: 4096
+    extraBody: { reasoning: { enabled: false }, provider: { order: [mistral], allow_fallbacks: false } }   # Mistral 176/176

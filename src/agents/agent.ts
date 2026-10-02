@@ -3,27 +3,34 @@
  * the parts that must be identical for everyone: auto-resolving forced
  * choices, validation, fallback on failure, notes carry-over, and analytics.
  */
-import { type TokenUsage, ZERO_USAGE, type Recorder } from "../analytics/recorder.ts";
+import { type CallRecord, type TokenUsage, ZERO_USAGE, type Recorder } from "../analytics/recorder.ts";
 import type { EventConfig, SeatConfig } from "../config.ts";
 import { type DecisionRequest, type DecisionResponse, type DecideContext, validateResponse } from "../types.ts";
 import { debug } from "../util/log.ts";
 import type { Bot } from "./bots.ts";
-import { type LlmAgent, type MatchNotesInput } from "./llm.ts";
+import { type LlmAgent, type MatchNotesInput, type StudyResult } from "./llm.ts";
 import { hasPrompt } from "./render.ts";
 
 export interface AgentResult {
   response: DecisionResponse | null;
-  /** The provider kept failing (HTTP/network/timeout) after retries: an infrastructure problem, not the agent's play. */
+  /** The provider kept failing (HTTP/network/in-body errors) after retries: an infrastructure problem, not the agent's play. */
   infraError?: boolean;
+  /** The decision's time budget ran out (model time only; provider backoff excluded): the agent's failure. */
+  timedOut?: boolean;
   usage: TokenUsage;
   modelCalls: number;
   toolCalls: Record<string, number>;
   invalidAttempts: number;
+  /** Model calls stopped by the output cap. */
+  truncated?: number;
+  /** First breach of the seat's reasoning/host spec (see checkSeatSpec). */
+  specViolation?: string;
   error?: string;
 }
 
 export interface CallInfo {
   turn: number; latencyMs: number; usage: TokenUsage; stopReason?: string; httpStatus?: number; error?: string; toolCallsRequested: number; servedBy?: string;
+  truncated?: boolean; timedOut?: boolean; specViolation?: string;
 }
 export type CallObserver = (c: CallInfo) => void;
 
@@ -60,10 +67,9 @@ export class Seat {
     if (!this.isLlm) return null;
     const base = { pod, seat: this.id, provider: this.provider, model: this.model, phase: "study" as const, kind: "cube_study" as const, requestId: `study-${this.id}` };
     const t0 = Date.now();
-    const r = await (this.agent as any).study(cubeCards, (c: CallInfo) =>
-      this.recorder.call({ ...base, ...c.usage, turn: c.turn, latencyMs: c.latencyMs, stopReason: c.stopReason, httpStatus: c.httpStatus, error: c.error, toolCallsRequested: c.toolCallsRequested, servedBy: c.servedBy }));
+    const r: StudyResult = await (this.agent as LlmAgent).study(cubeCards, (c) => this.recordCall(base, c));
     this.recorder.decision({ ...base, ...r.usage, numOptions: 0, choice: [], choiceLabels: [], valid: !!r.brief, invalidAttempts: 0,
-      fallback: !r.brief, autoResolved: false, modelCalls: r.modelCalls, toolCalls: r.toolCalls, latencyMs: Date.now() - t0, error: r.error });
+      fallback: !r.brief, autoResolved: false, modelCalls: r.modelCalls, toolCalls: r.toolCalls, latencyMs: Date.now() - t0, ...outcome(r) });
     this.brief = r.brief;
     return r.brief;
   }
@@ -74,18 +80,16 @@ export class Seat {
    */
   async betweenGames(pod: number, matchId: string, input: MatchNotesInput): Promise<void> {
     if (!this.isLlm || !hasPrompt(this.event.promptVersion, "between-games.md")) return;
-    const base = { pod, seat: this.id, provider: this.provider, model: this.model, phase: "game" as const, kind: "match_notes" as const,
+    // Its own phase: notes are written between games, so they aren't in-game decisions (docs/DECISION-PROVENANCE.md).
+    const base = { pod, seat: this.id, provider: this.provider, model: this.model, phase: "between_games" as const, kind: "match_notes" as const,
       requestId: `${matchId}-g${input.game}-notes`, matchId, game: input.game };
     const t0 = Date.now();
-    let apiFailed = false;
-    const r = await (this.agent as LlmAgent).writeMatchNotes({ ...input, previousNotes: this.matchNotes.get(matchId) }, this.brief ?? undefined, (c) => {
-      if (c.error) apiFailed = true;
-      this.recorder.call({ ...base, ...c.usage, turn: c.turn, latencyMs: c.latencyMs, stopReason: c.stopReason, httpStatus: c.httpStatus, error: c.error, toolCallsRequested: c.toolCallsRequested, servedBy: c.servedBy });
-    });
+    const r = await (this.agent as LlmAgent).writeMatchNotes({ ...input, previousNotes: this.matchNotes.get(matchId) }, this.brief ?? undefined,
+      (c) => this.recordCall(base, c));
     this.recorder.decision({ ...base, ...r.usage, numOptions: 0, choice: [], choiceLabels: [], valid: !!r.notes, invalidAttempts: 0,
-      fallback: false, forfeit: !r.notes && !apiFailed, autoResolved: false, modelCalls: r.modelCalls, toolCalls: r.toolCalls,
-      latencyMs: Date.now() - t0, rationale: r.notes ?? undefined, error: r.error });
-    if (apiFailed && !r.notes) throw new InfraError(`${this.id}: ${r.error ?? "provider failed"}`);
+      fallback: false, forfeit: !r.notes && !r.infraError, autoResolved: false, modelCalls: r.modelCalls, toolCalls: r.toolCalls,
+      latencyMs: Date.now() - t0, rationale: r.notes ?? undefined, ...outcome(r) });
+    if (r.infraError) throw new InfraError(`${this.id}: ${r.error ?? "provider failed"}`);
     if (r.notes) this.matchNotes.set(matchId, r.notes);
   }
 
@@ -94,7 +98,7 @@ export class Seat {
     const scope = req.phase !== "game" ? `pod:${ctx.pod}` : perGame ? `game:${ctx.matchId}:${ctx.game}` : `match:${ctx.matchId}`;
     const base = {
       pod: ctx.pod, seat: this.id, provider: this.provider, model: this.model, phase: req.phase, kind: req.kind,
-      requestId: req.requestId, matchId: ctx.matchId, game: ctx.game,
+      requestId: req.requestId, matchId: ctx.matchId, game: ctx.game, ...(req.attempt ? { attempt: req.attempt } : {}),
     };
     // Forced choice: exactly one legal answer -> don't spend tokens.
     const forced = forcedChoice(req);
@@ -104,15 +108,18 @@ export class Seat {
       return forced;
     }
     const t0 = Date.now();
-    let result: AgentResult;
-    try {
-      const matchNotes = req.phase === "game" && ctx.matchId ? this.matchNotes.get(ctx.matchId) : undefined;
-      result = await this.agent.decide(req, { ...ctx, notes: this.notes.get(scope), matchNotes, brief: this.brief ?? undefined }, (c) =>
-        this.recorder.call({ ...base, ...c.usage, turn: c.turn, latencyMs: c.latencyMs, stopReason: c.stopReason, httpStatus: c.httpStatus, error: c.error, toolCallsRequested: c.toolCallsRequested, servedBy: c.servedBy }));
-    } catch (e: any) {
-      result = { response: null, usage: ZERO_USAGE, modelCalls: 0, toolCalls: {}, invalidAttempts: 0, error: String(e?.message ?? e) };
+    // Anything the agent throws is a harness error (rendering, templates, the leak guard...): it propagates and the
+    // match is abandoned, rather than charged to the agent as a forfeit. Provider failures come back as infraError.
+    const matchNotes = req.phase === "game" && ctx.matchId ? this.matchNotes.get(ctx.matchId) : undefined;
+    const result = await this.agent.decide(req, { ...ctx, notes: this.notes.get(scope), matchNotes, brief: this.brief ?? undefined },
+      (c) => this.recordCall(base, c));
+    if (result.infraError) {
+      // Recorded first, so the tokens spent before the failure reach the cost tables.
+      this.recorder.decision({ ...base, ...result.usage, numOptions: req.options.length, choice: [], choiceLabels: [], valid: false,
+        invalidAttempts: result.invalidAttempts, fallback: false, autoResolved: false, modelCalls: result.modelCalls, toolCalls: result.toolCalls,
+        latencyMs: Date.now() - t0, ...outcome(result) });
+      throw new InfraError(`${this.id}: ${result.error ?? "provider failed"}`);
     }
-    if (result.infraError) throw new InfraError(`${this.id}: ${result.error ?? "provider failed"}`);
     let response = result.response;
     let fallback = false;
     let forfeit = false;
@@ -132,9 +139,14 @@ export class Seat {
     this.recorder.decision({
       ...base, ...result.usage, numOptions: req.options.length, choice: response.choice, choiceLabels: labels(req, response.choice),
       valid: !fallback && !forfeit, invalidAttempts: result.invalidAttempts, fallback, forfeit, autoResolved: false, modelCalls: result.modelCalls,
-      toolCalls: result.toolCalls, latencyMs: Date.now() - t0, rationale: response.rationale, error: fallback ? result.error : undefined,
+      toolCalls: result.toolCalls, latencyMs: Date.now() - t0, rationale: response.rationale, ...outcome(result, fallback || forfeit),
     });
     return response;
+  }
+
+  private recordCall(base: Pick<CallRecord, "pod" | "seat" | "provider" | "model" | "phase" | "kind" | "requestId" | "matchId" | "game">, c: CallInfo) {
+    const { usage, ...rest } = c;
+    this.recorder.call({ ...base, ...usage, ...rest });
   }
 
   /** Carry draft notes into deckbuilding explicitly (same scope already, kept for clarity). */
@@ -142,6 +154,14 @@ export class Seat {
   /** Scratchpad access for persisting a scope to disk and restoring it in a re-run. */
   getNotes(scope: string) { return this.notes.get(scope); }
   setNotes(scope: string, notes: string) { this.notes.set(scope, notes); }
+}
+
+/** The failure details a decision row carries (only the ones that are set). */
+function outcome(r: Pick<AgentResult, "error" | "infraError" | "timedOut" | "truncated" | "specViolation">, failed = true) {
+  return {
+    ...(failed && r.error ? { error: r.error } : {}), ...(r.infraError ? { infraError: true } : {}), ...(r.timedOut ? { timedOut: true } : {}),
+    ...(r.truncated ? { truncated: r.truncated } : {}), ...(r.specViolation ? { specViolation: r.specViolation } : {}),
+  };
 }
 
 function labels(req: DecisionRequest, ids: string[]) {

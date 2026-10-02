@@ -4,8 +4,8 @@ Every run writes to `runs/<runId>/`:
 
 | File | One row per | Key fields |
 |---|---|---|
-| `usage.jsonl` | **model API call** | seat, provider, model, phase, kind, requestId, matchId, game, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens`, `latencyMs`, `stopReason`, `httpStatus`, `error`, `toolCallsRequested` |
-| `decisions.jsonl` | **decision** | the same ids, token totals for the decision, `numOptions`, `choice`, `choiceLabels`, `valid`, `invalidAttempts`, `fallback`, `autoResolved`, `modelCalls`, `toolCalls` by name, `latencyMs`, `rationale`, `error` |
+| `usage.jsonl` | **model API call** | seat, provider, model, phase, kind, requestId, matchId, game, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens`, `latencyMs`, `stopReason`, `httpStatus`, `error` (every failed provider attempt, retried or not), `toolCallsRequested`, `servedBy`, `truncated` (hit the output cap), `timedOut` (aborted by the decision clock), `specViolation` (broke the seat's reasoning/host spec) |
+| `decisions.jsonl` | **decision** | the same ids, token totals for the decision, `numOptions`, `choice`, `choiceLabels`, `valid`, `invalidAttempts`, `fallback`, `autoResolved`, `modelCalls`, `toolCalls` by name, `latencyMs`, `rationale`, `error` (why it failed), `forfeit`, `infraError` (the match was abandoned after this row), `timedOut`, `truncated` (calls cut off), `specViolation`, `attempt` (an engine re-ask of the same step). Match notes have phase `between_games`. |
 | `draft.jsonl` | draft pick | seat, pack, pick, card taken, full pack contents |
 | `matches.jsonl` | match | seats, per-game winner, on-the-play, turns, end reason, decisions per seat, duration, `delegations` (decisions Forge's AI made for an agent) |
 | `events.jsonl` | run/pod milestone | seating, standings, cube size |

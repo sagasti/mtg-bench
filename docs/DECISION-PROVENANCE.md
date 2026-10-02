@@ -13,14 +13,20 @@ under `provenance`.
 | **forced** | Only one legal action existed, so no question was asked. | Neutral: no choice existed. |
 | **policy** | A documented, configured rule acted without asking, where the alternatives are treated as equivalent or the stop is configured as not meaningful. | Must be disclosed with the rule; each rule is listed below and can be switched off where noted. |
 | **delegated** | A real choice made by Forge's AI or by a fixed default (not the agent). | Contaminates the measurement; should be near zero. Every instance is reported with its reason. |
-| **forfeit** | The agent failed the decision after `event.maxRetries` re-asks and got the null action (pass, decline, nothing, first legal option in engine order, or a cancelled cast). | Counts against the agent; measures its competence. |
+| **forfeit** | The agent failed the decision after `event.maxRetries` re-asks, or ran out of its time budget (`decisionTimeoutSec`, model time only), and got the null action (pass, decline, nothing, first legal option in engine order, or a cancelled cast). | Counts against the agent; measures its competence. |
 
 "Agent share of real choices" in the report is agent / (agent + delegated + forfeit).
 
 ## Where it is recorded
 
 - `decisions.jsonl`: one row per question asked. `autoResolved: true` = forced (a single option); `forfeit: true` =
-  forfeit decided by the harness; `fallback: true` = rank-bot built the deck (deckbuilding only, not in-game).
+  forfeit decided by the harness, with the reason in `error` (`timedOut: true` when the time budget ran out);
+  `fallback: true` = rank-bot built the deck (deckbuilding only, not in-game). Match notes written between games have
+  phase `between_games`, so they are not in-game decisions. A row with `infraError: true` is the decision during which
+  the provider kept failing; the match was abandoned there, so it is no one's decision (it is recorded for its tokens;
+  the report's provenance table doesn't skip it yet, see MB-019).
+  Provider failures and harness exceptions are never forfeits: the first abandons the match as an infrastructure error,
+  the second as a harness error.
 - `matches.jsonl`: per match, `auto[]` (forced and policy actions taken by the bridge, counted per game, with reason),
   `delegations[]` (delegated, with reason) and `forfeits[]` (forfeits detected by the bridge, with reason).
 - `report.md` / `summary.json`: the combined table and breakdown.
@@ -53,7 +59,8 @@ The human-controller bridge (`engine.controller: human`, the default: `PlayerCon
 | Decision types not offered to agents (e.g. convoke on the AI bridge, naming a card) | delegated | both | "not offered to agents yet" / "free-text input ..." |
 | Too many combat-damage or divide splits to list (> 60): default used | delegated | human | "too many possible splits; default used ..." |
 | Attack/block still illegal after the null action (a requirement applies): Forge's AI declares | delegated | human | "declaration rejected and the null action is illegal ..." |
-| Answer kept failing validation | forfeit | both (harness) | decision row `forfeit` |
+| Answer kept failing validation (including a malformed `choice` or unparseable tool arguments) | forfeit | both (harness) | decision row `forfeit`, reason in `error` |
+| Decision time budget used up (model time; provider backoff and failed attempts excluded) | forfeit | both (harness) | decision row `forfeit` + `timedOut`, reason in `error` |
 | In-game failure after the retry budget (lands that can't pay, illegal attack/block, a click with no effect) | forfeit | both | "chosen sources could not pay ...", "declaration rejected ...", "same click N times without effect ..." |
 
 ### Options filtered before asking (not actions, but they shape what the agent sees)

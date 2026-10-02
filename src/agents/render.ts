@@ -1,12 +1,13 @@
 /** Turns a DecisionRequest into the text an LLM sees, applying the event's knowledge tier. */
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 import { type CardDb, cardText, getCard, isBasicLand } from "../cards/db.ts";
 import type { EventConfig } from "../config.ts";
 import type { DecisionRequest, Phase } from "../types.ts";
 
-const CARD_KEYS = new Set(["name", "card", "cards", "picks", "pool", "pack", "seen", "hand", "deck"]);
+const CARD_KEYS = new Set(["name", "card", "cards", "picks", "pool", "pack", "seen", "hand", "deck", "graveyard", "exile", "source"]);
 
 /**
  * Collect every card name mentioned in state/options so we can attach oracle text. Objects that carry their own
@@ -53,9 +54,13 @@ export function renderRequest(req: DecisionRequest, event: EventConfig, db: Card
   return parts.join("\n\n");
 }
 
+/** prompts/ of this package, independent of the working directory. */
+const PROMPTS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../prompts");
+export const promptFile = (version: string, name: string) => path.join(PROMPTS_DIR, version, name);
+
 /** Whether a prompt version has a given template (newer behaviour is keyed off the prompt version, so old runs reproduce). */
 export function hasPrompt(version: string, name: string): boolean {
-  return fs.existsSync(path.resolve("prompts", version, name));
+  return fs.existsSync(promptFile(version, name));
 }
 
 /** Fill a template from prompts/<version>/<name>. */
@@ -67,8 +72,9 @@ const promptCache = new Map<string, string>();
 function readPrompt(version: string, name: string): string {
   const key = `${version}/${name}`;
   if (!promptCache.has(key)) {
-    const file = path.resolve("prompts", version, name);
-    promptCache.set(key, fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim() : "");
+    const file = promptFile(version, name);
+    if (!fs.existsSync(file)) throw new Error(`prompt template missing: ${file}`);
+    promptCache.set(key, fs.readFileSync(file, "utf8").trim());
   }
   return promptCache.get(key)!;
 }
