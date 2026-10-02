@@ -167,6 +167,9 @@ final class InputDriver implements Observer, Runnable {
     /** What the current payment still owed when Auto was pressed (null: not pressed since), and whether Auto failed on it. */
     private String owedAtAuto = null;
     private boolean autoFailed = false;
+    /** Whether the last Auto press was seen starting its payment task, and presses Forge ignored on this payment. */
+    private boolean autoStarted = false;
+    private int autoIgnored = 0;
 
     private void drive(Input in) throws Exception {
         trace("drive " + in.getClass().getSimpleName());
@@ -182,6 +185,8 @@ final class InputDriver implements Observer, Runnable {
         asks = 0;
         owedAtAuto = null;
         autoFailed = false;
+        autoStarted = false;
+        autoIgnored = 0;
         // The game thread posts the input's first message to the event thread after announcing the input, so the
         // flushes in awaitMessage can run before it is even posted; until it has run, the prompt and buttons are the
         // previous input's (and InputAttack has no defender yet). Wait for this input's own message, briefly.
@@ -624,11 +629,22 @@ final class InputDriver implements Observer, Runnable {
                 if (src == null || !interchangeableSource(src)) interchangeable = false;
             }
             int need = remainingMana(in);
+            // Never compare or re-plan while a payment task may still run: its controller swap would race the plan's.
+            // (drive() waits for it before each step; this keeps that true here.) Retried next step.
+            if (((InputPayMana) in).isActivatingManaAbility() || manaTask() > 0) {
+                trace("payment: a payment task is still running; waiting");
+                return true;
+            }
             // Auto pressed on this payment last step and nothing changed: Forge's AI payer couldn't pay. No more Auto here.
+            // Only a press whose task was seen starting counts; a press Forge ignored is retried, at most twice.
             String owed = owedKey(in);
             if (owedAtAuto != null && owedAtAuto.equals(owed) && !autoFailed) {
-                autoFailed = true;
-                trace("payment: Auto changed nothing; asking for sources instead");
+                if (autoStarted || ++autoIgnored > 2) {
+                    autoFailed = true;
+                    trace("payment: Auto changed nothing (task " + (autoStarted ? "ran" : "never started") + "); asking for sources instead");
+                } else {
+                    trace("payment: Auto press ignored by Forge; pressing again");
+                }
             }
             owedAtAuto = null;
             // Forge enables Auto from a plan it makes once per payment and keeps while plain sources are tapped, so the
@@ -649,6 +665,10 @@ final class InputDriver implements Observer, Runnable {
                 else ch.auto("policy", "mana_payment", "interchangeable sources: same-name lands, nothing attached, no counters (Forge's Auto pays)");
                 owedAtAuto = owed;
                 click("ok", game);
+                // InputPayMana.onOk locks the payment before handing Auto to a game thread, and drive() waits for the
+                // lock and the task before the next step; a press it ignored leaves both clear.
+                autoStarted = ((InputPayMana) in).isActivatingManaAbility() || manaTask() > 0;
+                trace("payment: Auto pressed; task " + (autoStarted ? "started" : "not started"));
                 return true;
             }
             if (++batches > ch.ctx.maxRetries + 1) {
