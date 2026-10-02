@@ -107,7 +107,7 @@ export class ForgeEngine implements GameEngine {
               const req: DecisionRequest = {
                 requestId: `${spec.matchId}-g${msg.game ?? current?.game ?? 0}-${msg.rid}`,
                 phase: "game", kind: msg.kind as DecisionKind, prompt: msg.prompt, state: msg.state,
-                options: msg.options, min: msg.min, max: msg.max, hints: msg.hints,
+                options: msg.options, min: msg.min, max: msg.max, hints: msg.hints, attempt: msg.attempt,
               };
               try {
                 const res = await spec.seats[seatIdx].decide(req, { pod: spec.pod, matchId: spec.matchId, game: msg.game ?? current?.game });

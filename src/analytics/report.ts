@@ -15,14 +15,20 @@ import { readJsonl } from "../util/log.ts";
 import { describeProvenance, type Provenance } from "../util/provenance.ts";
 import type { CallRecord, DecisionRecord } from "./recorder.ts";
 
+/** Row fields newer runs add (absent in older runs). */
+type DecisionRow = DecisionRecord & { infraError?: boolean; timedOut?: boolean; specViolation?: unknown; attempt?: number };
+type CallRow = CallRecord & { truncated?: boolean; specViolation?: unknown };
+
 interface Agg {
   decisions: number; autoResolved: number; modelCalls: number; apiErrors: number;
   inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; reasoningTokens: number;
   invalidAttempts: number; fallbacks: number; latencies: number[]; tools: Record<string, number>; cost: number | null;
   reportedCost: number; costReportedCalls: number; forfeits: number;
+  reasks: number; infraErrors: number; truncated: number;
 }
 const newAgg = (): Agg => ({ decisions: 0, autoResolved: 0, modelCalls: 0, apiErrors: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0,
-  cacheWriteTokens: 0, reasoningTokens: 0, invalidAttempts: 0, fallbacks: 0, latencies: [], tools: {}, cost: 0, reportedCost: 0, costReportedCalls: 0, forfeits: 0 });
+  cacheWriteTokens: 0, reasoningTokens: 0, invalidAttempts: 0, fallbacks: 0, latencies: [], tools: {}, cost: 0, reportedCost: 0, costReportedCalls: 0, forfeits: 0,
+  reasks: 0, infraErrors: 0, truncated: 0 });
 
 export function costOf(r: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }, p?: Pricing): number | null {
   if (!p) return null;
@@ -30,11 +36,15 @@ export function costOf(r: { inputTokens: number; outputTokens: number; cacheRead
     + r.cacheWriteTokens * (p.cacheWrite ?? p.input * 1.25)) / 1e6;
 }
 
-/** Decision counts, validity, latency and tool use come from decision rows. */
-function addDecision(a: Agg, d: DecisionRecord) {
+/**
+ * Decision counts, validity, latency and tool use come from decision rows. A decision abandoned by an infrastructure
+ * error isn't the agent's; a bridge re-ask (attempt > 0) continues the decision it re-asks; a timeout is a forfeit.
+ */
+function addDecision(a: Agg, d: DecisionRow) {
   if (d.autoResolved) { a.autoResolved++; return; }
-  a.decisions++;
-  a.invalidAttempts += d.invalidAttempts; if (d.fallback) a.fallbacks++; if (d.forfeit) a.forfeits++;
+  if (d.infraError) { a.infraErrors++; return; }
+  if (d.attempt) a.reasks++; else a.decisions++;
+  a.invalidAttempts += d.invalidAttempts; if (d.fallback) a.fallbacks++; if (d.forfeit || d.timedOut) a.forfeits++;
   if (d.modelCalls > 0) a.latencies.push(d.latencyMs);
   for (const [k, v] of Object.entries(d.toolCalls ?? {})) a.tools[k] = (a.tools[k] ?? 0) + v;
 }
@@ -43,8 +53,8 @@ function addDecision(a: Agg, d: DecisionRecord) {
  * Tokens and cost come from call rows (usage.jsonl), which include the calls of a decision that ended in an
  * infrastructure error: that decision throws before its decision row is written.
  */
-function addCall(a: Agg, c: CallRecord, pricing: Record<string, Pricing>) {
-  a.modelCalls++;
+function addCall(a: Agg, c: CallRow, pricing: Record<string, Pricing>) {
+  a.modelCalls++; if (c.truncated) a.truncated++;
   a.inputTokens += c.inputTokens; a.outputTokens += c.outputTokens;
   a.cacheReadTokens += c.cacheReadTokens; a.cacheWriteTokens += c.cacheWriteTokens; a.reasoningTokens += c.reasoningTokens;
   a.reportedCost += c.reportedCostUsd ?? 0; a.costReportedCalls += c.costReportedCalls ?? 0;
@@ -78,8 +88,8 @@ export function sharedDrafts(runDirs: string[]): string[] {
 }
 
 export function summarize(runDirs: string[], cfg?: BenchConfig) {
-  const decisions: DecisionRecord[] = runDirs.flatMap((d) => readJsonl(path.join(d, "decisions.jsonl")));
-  const calls: CallRecord[] = runDirs.flatMap((d) => readJsonl(path.join(d, "usage.jsonl")));
+  const decisions: DecisionRow[] = runDirs.flatMap((d) => readJsonl(path.join(d, "decisions.jsonl")));
+  const calls: CallRow[] = runDirs.flatMap((d) => readJsonl(path.join(d, "usage.jsonl")));
   const matches: MatchResult[] = readMatches(runDirs);
   const pricing: Record<string, Pricing> = { ...(cfg?.pricing ?? {}) };
   for (const d of runDirs) {
@@ -120,6 +130,17 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
   const unrecorded = new Map<string, number>();
   for (const c of calls) if (!recorded.has(`${c.runId}|${c.seat}|${c.requestId}`)) unrecorded.set(c.seat, (unrecorded.get(c.seat) ?? 0) + 1);
 
+  // Calls (and decisions) that broke the seat's pinned spec (reasoning regime, host): the seat didn't run as configured.
+  const specViolations = new Map<string, { calls: number; decisions: number; what: Map<string, number> }>();
+  for (const [rows, field] of [[calls, "calls"], [decisions, "decisions"]] as const) for (const r of rows) {
+    if (!r.specViolation) continue;
+    const v = specViolations.get(r.seat) ?? { calls: 0, decisions: 0, what: new Map() };
+    v[field]++;
+    const what = typeof r.specViolation === "string" ? r.specViolation : JSON.stringify(r.specViolation);
+    v.what.set(what, (v.what.get(what) ?? 0) + 1);
+    specViolations.set(r.seat, v);
+  }
+
   const ratings = rate(outcomesFromMatches(matches), { bootstrap: 500 });
   const censored = censoredBySeat(matches);
   const games = matches.flatMap((m) => m.games);
@@ -135,7 +156,7 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
     if (!forfeited.has(seat)) forfeited.set(seat, new Map());
     forfeited.get(seat)!.set(key, (forfeited.get(seat)!.get(key) ?? 0) + 1);
   };
-  for (const d of decisions) if (d.forfeit) bump(d.seat, `${d.kind} (no valid answer)`);
+  for (const d of decisions) if (d.forfeit || d.timedOut) bump(d.seat, `${d.kind} (${d.timedOut ? "timed out" : "no valid answer"})`);
   for (const m of matches) for (const f of m.forfeits ?? []) bump(m.seats[f.seat], `${f.what} (${f.reason.replace(/ in \d+ attempts.*/, "")})`);
 
   // Who decided each in-game decision (docs/DECISION-PROVENANCE.md): the agent, forced (one legal action),
@@ -148,11 +169,12 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
   const add = (m: Map<string, number>, k: string, n = 1) => m.set(k, (m.get(k) ?? 0) + n);
   for (const d of decisions) {
     // In-game steps only: match notes are written between games (runs before their own phase logged them as "game").
-    if (d.phase !== "game" || d.kind === "match_notes") continue;
+    // An infrastructure error abandoned the match: nobody decided. A re-ask (attempt > 0) is the same step again.
+    if (d.phase !== "game" || d.kind === "match_notes" || d.infraError) continue;
     const p = prov(d.seat);
     if (d.autoResolved) add(p.forced, `${d.kind}: only one option`);
-    else if (d.forfeit) add(p.forfeit, `${d.kind}: no valid answer`);
-    else if (!d.fallback) p.agent++;
+    else if (d.forfeit || d.timedOut) add(p.forfeit, `${d.kind}: ${d.timedOut ? "timed out" : "no valid answer"}`);
+    else if (!d.fallback && !d.attempt) p.agent++;
   }
   for (const m of matches) {
     for (const a of m.auto ?? []) add((prov(m.seats[a.seat]) as any)[a.category] ?? prov(m.seats[a.seat]).policy, `${a.what}: ${a.reason}`, a.count);
@@ -182,13 +204,20 @@ export function summarize(runDirs: string[], cfg?: BenchConfig) {
     for (const e of m.engineErrors ?? []) add(engineErrors, `${e.kind} at ${e.at || "?"}`);
   }
 
-  return { incomplete, versions, decisions, calls, unrecorded, matches, bySeat, bySeatPhase, byKind, ratings, censored, games, reasons, delegated, forfeited, provenance, engineErrors, matchesWithEngineErrors, playWinRate: decided.length ? playWins / decided.length : null, pricing };
+  return { incomplete, versions, specViolations, decisions, calls, unrecorded, matches, bySeat, bySeatPhase, byKind, ratings, censored, games, reasons, delegated, forfeited, provenance, engineErrors, matchesWithEngineErrors, playWinRate: decided.length ? playWins / decided.length : null, pricing };
 }
 
 export function renderReport(s: ReturnType<typeof summarize>, title: string): string {
   const L: string[] = [];
   L.push(`# ${title}`, "");
   if (s.incomplete.length) L.push(`**INCOMPLETE**: the run stopped before it finished (${s.incomplete.join("; ")}). Standings and ratings cover only the matches that were played.`, "");
+  if (s.specViolations.size) {
+    L.push("**SPEC VIOLATIONS**: these seats made calls outside their pinned spec (reasoning regime or host), so their results don't measure the configured setup:", "");
+    for (const [seat, v] of [...s.specViolations.entries()].sort()) {
+      L.push(`- ${seat}: ${v.calls} call(s), ${v.decisions} decision(s): ${[...v.what.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([w, n]) => `${w} (${n})`).join("; ")}`);
+    }
+    L.push("");
+  }
   L.push(`Matches: ${s.matches.length} · Games: ${s.games.length} · Decisions: ${s.decisions.length} · Model calls: ${s.calls.length}`, "");
 
   L.push("## Ratings (Bradley-Terry, game level, Elo scale, 95% bootstrap CI)", "");
@@ -243,13 +272,13 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
   L.push("");
 
   L.push("## Reliability and tool use by seat", "");
-  L.push("| Seat | Invalid answers | Forfeits (rate) | Fallbacks (rate) | API errors | Tool calls |", "|---|---|---|---|---|---|");
+  L.push("| Seat | Invalid answers | Forfeits (rate) | Re-asks | Fallbacks (rate) | API errors | Truncated calls (rate) | Infra-error decisions | Tool calls |", "|---|---|---|---|---|---|---|---|---|");
   for (const [seat, a] of [...s.bySeat.entries()].sort()) {
     const tools = Object.entries(a.tools).filter(([n]) => n !== "submit_decision" && n !== "submit_brief").map(([n, v]) => `${n}: ${v}`).join(", ") || "–";
-    const rate = (n: number) => `${n} (${a.decisions ? ((100 * n) / a.decisions).toFixed(1) : 0}%)`;
-    L.push(`| ${seat} | ${a.invalidAttempts} | ${rate(a.forfeits)} | ${rate(a.fallbacks)} | ${a.apiErrors} | ${tools} |`);
+    const rate = (n: number, of = a.decisions) => `${n} (${of ? ((100 * n) / of).toFixed(1) : 0}%)`;
+    L.push(`| ${seat} | ${a.invalidAttempts} | ${rate(a.forfeits)} | ${a.reasks} | ${rate(a.fallbacks)} | ${a.apiErrors} | ${rate(a.truncated, a.modelCalls)} | ${a.infraErrors} | ${tools} |`);
   }
-  L.push("");
+  L.push("", "Re-asks are the bridge asking the same in-game step again after an answer failed in-game; they aren't counted as decisions. Truncated calls stopped at the output-token limit. Infra-error decisions were abandoned by a provider or harness failure and aren't counted as the agent's.", "");
 
   L.push("## Engine exceptions", "");
   if (!s.engineErrors.size) L.push("None: Forge logged no exceptions during any game.", "");
@@ -330,6 +359,7 @@ export function writeReport(runDir: string, cfg?: BenchConfig) {
   fs.writeFileSync(path.join(runDir, "report.md"), renderReport(s, `Run ${path.basename(runDir)}`));
   const json = {
     incomplete: s.incomplete.length ? s.incomplete : undefined,
+    specViolations: s.specViolations.size ? Object.fromEntries([...s.specViolations.entries()].map(([k, v]) => [k, { ...v, what: Object.fromEntries(v.what) }])) : undefined,
     versions: s.versions,
     ratings: s.ratings,
     censored: Object.fromEntries(s.censored),

@@ -47,7 +47,7 @@ A run without `run_end` in `events.jsonl`, or with a pod that has `pod_start` bu
 2. **Token usage and cost by seat**: decisions, calls, each token type, tokens/decision, cost, p50/p95 decision latency. Tokens, calls and cost are summed from `usage.jsonl`, so the calls of a decision that ended in an infrastructure error (which has no decision row) still count; the report says how many such calls there were. Decision counts, validity and latency come from `decisions.jsonl`.
 3. **By seat × phase**: study / draft / deckbuild / game split of tokens and cost.
 4. **By decision kind**: average tokens, invalid answers and fallbacks per kind (e.g. are blockers expensive? do models flub targets?).
-5. **Reliability and tool use**: invalid answers, fallback rate, API errors, knowledge-tool calls by tool.
+5. **Reliability and tool use**: invalid answers, forfeits (a timed-out decision is a forfeit, labelled "timed out" in the forfeit table), bridge re-asks (`attempt > 0` rows: the same in-game step asked again, not a new decision), fallback rate, API errors, truncated calls (stopped at the output-token limit) as a share of calls, decisions abandoned by an infrastructure error (`infraError`; not counted as the agent's anywhere), knowledge-tool calls by tool. Seats whose calls or decisions carry `specViolation` (outside their pinned reasoning regime or host) are listed under **SPEC VIOLATIONS** at the top of the report.
 6. **Decisions made by Forge AI on an agent's behalf**: count per seat, share of that seat's game decisions, and the most common kinds with reasons.
 7. **Games**: average length, on-the-play win rate, end reasons, failed matches.
 
