@@ -9,6 +9,7 @@
  *   match <config.yaml> --seats A,B --decks a.dck,b.dck [--matches N] [--parallel N] [--run-id ID] [--force]   head-to-head with fixed decks, no draft
  *   report <runDir...> [--allow-same-seed] [--allow-anchor-changes] [--max-failure-rate 0.05]   (re)build report.md for one run, or a merged report for several
  *   rate <runDir...> [--level game|match] [--anchor seat=1500] [--allow-same-seed] [--allow-anchor-changes]
+ *   conformance <config.yaml> [--update] [--baseline FILE] [--run-id ID] [--force]   fixed bot matches vs a stored baseline (after any Forge bump)
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -26,6 +27,7 @@ import { SUBMIT_TOOL } from "./knowledge/tools.ts";
 import { loadRules } from "./knowledge/rules.ts";
 import { rate } from "./rating/bt.ts";
 import { outcomesFromMatches, readMatches } from "./rating/outcomes.ts";
+import { compareToBaseline, CONFORMANCE_DIR, runConformance } from "./tournament/conformance.ts";
 import { runHeadToHead } from "./tournament/match.ts";
 import { runEvent } from "./tournament/run.ts";
 import { info, loadDotEnv, setVerbose } from "./util/log.ts";
@@ -36,7 +38,7 @@ function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(`--${name}`);
   return i >= 0 ? args[i + 1] : undefined;
 }
-const BOOL_FLAGS = ["--ping", "--verbose", "--force", "--allow-seat-changes", "--allow-same-seed", "--allow-anchor-changes"];
+const BOOL_FLAGS = ["--ping", "--verbose", "--force", "--allow-seat-changes", "--allow-same-seed", "--allow-anchor-changes", "--update"];
 const positional = (args: string[]) => args.filter((a, i) => !a.startsWith("--") && !(i > 0 && args[i - 1].startsWith("--") && !BOOL_FLAGS.includes(args[i - 1])));
 
 /**
@@ -176,6 +178,30 @@ async function main() {
       console.log(`Report: ${path.join(runDir, "report.md")}`);
       return;
     }
+    case "conformance": {
+      // Bridge conformance (MB-010): fixed bot matches compared with a stored baseline; run after any Forge bump.
+      const cfg = loadConfig(positional(args)[0]);
+      if (flag(args, "forge-res")) cfg.forgeRes = path.resolve(flag(args, "forge-res")!);
+      const engineType = (flag(args, "engine") ?? cfg.engine.type) as "mock" | "forge";
+      const engine = engineType === "forge" ? new ForgeEngine(cfg.engine) : new MockEngine(loadDb());
+      const baselineFile = path.resolve(flag(args, "baseline") ?? path.join(CONFORMANCE_DIR, `baseline.${engineType}.json`));
+      const { runDir, current } = await runConformance(cfg, engine, { runId: flag(args, "run-id"), force: args.includes("--force"), parallel: flag(args, "parallel") ? Number(flag(args, "parallel")) : undefined });
+      for (const [id, m] of Object.entries(current.matches)) {
+        const total = Object.values(m.decisions).reduce((a, b) => a + b, 0);
+        console.log(`  ${id.padEnd(18)} ${m.games} game(s) [${m.endReasons.join(", ")}] · ${total} decisions · ${m.forfeits} forfeits · ${m.delegations} delegated · ${m.engineExceptions} engine exceptions · ${m.bridgeErrors} bridge errors${m.error ? ` · ERROR ${m.error}` : ""}`);
+      }
+      if (args.includes("--update")) {
+        fs.writeFileSync(baselineFile, JSON.stringify(current, null, 2) + "\n");
+        console.log(`\nBaseline written: ${baselineFile}`);
+        return;
+      }
+      if (!fs.existsSync(baselineFile)) throw new Error(`no baseline at ${baselineFile}; create one with --update on a known-good bridge`);
+      const diffs = compareToBaseline(JSON.parse(fs.readFileSync(baselineFile, "utf8")), current);
+      if (diffs.length) { console.log(`\nCONFORMANCE FAILED against ${baselineFile}:`); for (const d of diffs) console.log(`  ✗ ${d}`); process.exitCode = 1; }
+      else console.log(`\nConformance passed against ${baselineFile}.`);
+      console.log(`Run: ${runDir}`);
+      return;
+    }
     case "report": {
       const dirs = positional(args);
       checkPoolable(dirs, args);
@@ -198,7 +224,7 @@ async function main() {
       return;
     }
     default:
-      console.log(fs.readFileSync(new URL(import.meta.url), "utf8").split("\n").slice(1, 10).join("\n"));
+      console.log(fs.readFileSync(new URL(import.meta.url), "utf8").split("\n").slice(1, 13).join("\n"));
   }
 }
 
