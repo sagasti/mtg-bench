@@ -83,6 +83,8 @@ bridge/build.sh <path to forge-gui-desktop-*-jar-with-dependencies.jar>
 ```
 **Done when** `bridge/build/mtg-bench-bridge.jar` exists. If javac fails, fix the bridge to match the Forge APIs. Keep the behaviour described in the class comments.
 
+**After any Forge bump or bridge change**, run `npm run bench -- conformance <bot config>` (docs/FORGE_SETUP.md "Conformance check"); it must pass against `conformance/baseline.forge.json` before real runs.
+
 ### T5. Mock smoke test (no Forge, no keys)
 ```bash
 npm run bench -- run config/smoke.mock.yaml --forge-res <forge>/res --run-id smoke-mock
@@ -168,6 +170,7 @@ config/                       smoke.mock.yaml, forge-bots.yaml, forge-1llm.yaml,
 ## 6. Decisions log (owner decisions, newest first)
 
 ### 2026-10-02
+- **Bridge conformance check after any Forge bump** (MB-010). `bench conformance <config>` plays four fixed bot matches (fixed decks in `conformance/decks/`, fixed seeds and event settings) and compares them with `conformance/baseline.forge.json`, recorded on Forge 2ccbbb01326e: exact on match errors, engine exceptions, bridge errors and new game-end kinds, tolerant on game and decision counts (same seed isn't guaranteed to replay the same games, though six runs on this commit were identical). `--update` re-records the baseline once a difference is understood.
 - **Events can be pre-registered by config hash** (MB-012). `run_start.configHash` is the SHA-256 of the effective config (event, seats, pricing, engine settings; no machine paths); `check` prints it, report.md shows it, and `run --expect-hash <h>` refuses any other config. **Exclusion rule:** a seat whose forfeits + fallbacks + API errors exceed `event.maxFailureRate` (default 5%) of its decisions is listed apart from the leaderboard, its numbers kept. The rest of MB-012 is split into MB-039 (ablations), MB-040 (draft/play decomposition), MB-041 (human baseline), MB-042 (held-out cube).
 - **The report states the bot-hint asymmetry** (MB-009): an "Information asymmetry" note under the ratings lists the computed tags rank-bot reads that LLM seats never see. A held-out cube is future work (§7), the cube being the owner's choice.
 - **Per-seat budgets stop the seat, not the run** (MB-011). `maxSpendUsd` (computed cost, needs `pricing`) and `maxP95LatencySec` (after 20 decisions) on a seat. Once over, the seat stays stopped (`seat_over_budget` event): its remaining matches are recorded as not played (no games, no result for either seat, no forfeit), and its draft picks and decks in later pods are rank-bot fallbacks. Checked before each match and each non-game decision, so a match in progress finishes. report.md lists matches not played per seat.

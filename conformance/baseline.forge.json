@@ -1,0 +1,167 @@
+{
+  "createdAt": "2026-10-02T13:20:21.938Z",
+  "provenance": {
+    "harness": {
+      "commit": "5a730359202416a005c1b0deef021cebc9e1a15f",
+      "dirty": false
+    },
+    "engine": "forge",
+    "cardsJsonSha256": "080c88ef3710724afa2a1e4e91c4beed58ef95588a33b4b3e501440f1b5f7143",
+    "rankings": {
+      "file": "/home/zach/forge-src/forge-gui/res/draft/rankings_cubecobra.txt",
+      "sha256": "cdb30bbd53af70dd8baea08e82b56a9ecd81b85fa0df92f39d539e865d4c8091"
+    },
+    "forge": {
+      "commit": "2ccbbb01326e28b38788c50f7f0e01b5d12f32b3",
+      "jar": "forge-gui-desktop-2.0.15-SNAPSHOT-jar-with-dependencies.jar",
+      "bridgeJarSha256": "db9a5b596c0a9076c6b0181e5c4e560b4ada588a845fe77f2f7cc2b8b2167153"
+    }
+  },
+  "settings": {
+    "seed": 1,
+    "gamesPerMatch": 3,
+    "maxGameTurns": 40,
+    "maxRetries": 3,
+    "priorityStops": "smart",
+    "manaPayment": "smart"
+  },
+  "matches": {
+    "rank-vs-random": {
+      "error": null,
+      "games": 2,
+      "endReasons": [
+        "AllOpponentsLost"
+      ],
+      "engineExceptions": 0,
+      "bridgeErrors": 0,
+      "decisions": {
+        "0:attackers": 19,
+        "0:blockers": 1,
+        "0:choose_ability": 2,
+        "0:confirm": 2,
+        "0:mana_payment": 16,
+        "0:mulligan": 2,
+        "0:optional_costs": 7,
+        "0:play_draw": 1,
+        "0:priority": 137,
+        "0:targets": 14,
+        "1:attackers": 6,
+        "1:choose_ability": 1,
+        "1:choose_entity": 2,
+        "1:confirm": 2,
+        "1:divide": 1,
+        "1:london_bottom": 4,
+        "1:mana_payment": 13,
+        "1:mulligan": 6,
+        "1:order_triggers": 3,
+        "1:play_draw": 1,
+        "1:priority": 96,
+        "1:targets": 12
+      },
+      "forfeits": 0,
+      "delegations": 0
+    },
+    "random-vs-rank": {
+      "error": null,
+      "games": 3,
+      "endReasons": [
+        "AllOpponentsLost"
+      ],
+      "engineExceptions": 0,
+      "bridgeErrors": 0,
+      "decisions": {
+        "0:assign_damage": 1,
+        "0:attackers": 20,
+        "0:blockers": 2,
+        "0:choose_ability": 1,
+        "0:choose_cards": 3,
+        "0:confirm": 26,
+        "0:london_bottom": 1,
+        "0:mana_payment": 16,
+        "0:mulligan": 4,
+        "0:play_draw": 1,
+        "0:priority": 114,
+        "0:targets": 12,
+        "1:attackers": 24,
+        "1:blockers": 5,
+        "1:choose_ability": 6,
+        "1:choose_cards": 4,
+        "1:choose_color": 5,
+        "1:choose_entity": 4,
+        "1:confirm": 2,
+        "1:london_bottom": 1,
+        "1:mana_payment": 20,
+        "1:mulligan": 4,
+        "1:optional_costs": 1,
+        "1:play_draw": 2,
+        "1:priority": 74,
+        "1:scry": 1,
+        "1:targets": 9
+      },
+      "forfeits": 2,
+      "delegations": 0
+    },
+    "rank-vs-rank": {
+      "error": null,
+      "games": 3,
+      "endReasons": [
+        "AllOpponentsLost"
+      ],
+      "engineExceptions": 0,
+      "bridgeErrors": 0,
+      "decisions": {
+        "0:attackers": 19,
+        "0:blockers": 11,
+        "0:choose_ability": 3,
+        "0:choose_cards": 1,
+        "0:confirm": 4,
+        "0:london_bottom": 1,
+        "0:mana_payment": 9,
+        "0:mulligan": 4,
+        "0:optional_costs": 1,
+        "0:order_triggers": 1,
+        "0:play_draw": 2,
+        "0:priority": 70,
+        "0:targets": 15,
+        "1:assign_damage": 2,
+        "1:attackers": 18,
+        "1:blockers": 1,
+        "1:choose_cards": 6,
+        "1:confirm": 4,
+        "1:cost_choice": 8,
+        "1:mana_payment": 16,
+        "1:mulligan": 3,
+        "1:pay_or_else": 2,
+        "1:play_draw": 1,
+        "1:priority": 132,
+        "1:targets": 1
+      },
+      "forfeits": 0,
+      "delegations": 0
+    },
+    "rank-vs-forge-ai": {
+      "error": null,
+      "games": 2,
+      "endReasons": [
+        "AllOpponentsLost"
+      ],
+      "engineExceptions": 0,
+      "bridgeErrors": 0,
+      "decisions": {
+        "0:attackers": 20,
+        "0:blockers": 11,
+        "0:choose_cards": 2,
+        "0:choose_entity": 3,
+        "0:confirm": 4,
+        "0:mana_payment": 18,
+        "0:mulligan": 2,
+        "0:play_draw": 2,
+        "0:priority": 46,
+        "0:scry": 1,
+        "0:targets": 10
+      },
+      "forfeits": 0,
+      "delegations": 0
+    }
+  }
+}
