@@ -113,10 +113,16 @@ export class RankBot implements Bot {
         const sorted = [...req.options].sort((a, b) => this.score(a.card) - this.score(b.card));
         return { choice: sorted.slice(0, req.min).map((o) => o.id) };
       }
+      case "cost_choice": {
+        // "how many cards to delve": as many as allowed (greedy), so the mana cost shrinks; otherwise first options
+        const nums = req.options.map((o) => Number(o.label));
+        if (req.max === 1 && nums.every((n) => Number.isInteger(n))) return { choice: [req.options[nums.indexOf(Math.max(...nums))].id] };
+        return { choice: req.options.slice(0, Math.max(req.min, Math.min(req.max, 1))).map((o) => o.id) };
+      }
       case "targets": {
-        // prefer targets that are marked hostile (opponent's stuff), else first
+        // prefer targets that are marked hostile (opponent's stuff), else first; never an empty answer when a target exists
         const hostile = req.options.filter((o) => o.meta?.hostile);
-        const pool = hostile.length >= req.min ? hostile : req.options;
+        const pool = hostile.length > 0 && hostile.length >= req.min ? hostile : req.options;
         return { choice: pool.slice(0, Math.max(req.min, Math.min(1, req.max))).map((o) => o.id) };
       }
       default: {
