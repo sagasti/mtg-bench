@@ -93,8 +93,9 @@ seats:
     apiKeyEnv: OPENROUTER_API_KEY
     maxTokens: 4096
     # `enabled: false` was ignored (256k reasoning tokens in the sanity game). max_tokens maps to Gemini's thinkingBudget,
-    # and a budget of 0 turns thinking off on 2.5 Flash / Flash-Lite. "Google" 320/320 = Vertex.
-    extraBody: { reasoning: { max_tokens: 0 }, provider: { order: [google-vertex], allow_fallbacks: false } }
+    # and a budget of 0 turns thinking off on 2.5 Flash / Flash-Lite. Probed 2026-10-02: Google Vertex ignores every
+    # off switch (max_tokens 0, enabled false, effort none: 44-74 reasoning tokens); Google AI Studio honours it (0).
+    extraBody: { reasoning: { max_tokens: 0 }, provider: { order: [google-ai-studio], allow_fallbacks: false } }
   - id: gpt-6-luna
     provider: openrouter
     model: openai/gpt-6-luna
