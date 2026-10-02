@@ -46,20 +46,20 @@ export function loadCube(db: CardDb, spec: string, forgeRes?: string): Cube {
   return { name: parsed.name ?? path.basename(file, path.extname(file)), cards, missing };
 }
 
+/** The rankings file loadRankings reads: Forge's, else data/'s; undefined when neither exists. */
+export function rankingsFile(forgeRes?: string): string | undefined {
+  return [forgeRes && path.join(forgeRes, "draft", "rankings_cubecobra.txt"), path.resolve("data/rankings_cubecobra.txt")]
+    .find((f): f is string => !!f && fs.existsSync(f));
+}
+
 /** CubeCobra-derived ranking shipped with Forge: lower rank = stronger pick. */
 export function loadRankings(forgeRes?: string): Map<string, number> {
-  const candidates = [
-    forgeRes && path.join(forgeRes, "draft", "rankings_cubecobra.txt"),
-    path.resolve("data/rankings_cubecobra.txt"),
-  ].filter(Boolean) as string[];
   const m = new Map<string, number>();
-  for (const f of candidates) {
-    if (!fs.existsSync(f)) continue;
-    for (const line of fs.readFileSync(f, "utf8").split(/\r?\n/)) {
-      const mm = line.match(/^#(\d+)\|([^|]+)\|/);
-      if (mm) m.set(mm[2].toLowerCase(), Number(mm[1]));
-    }
-    break;
+  const f = rankingsFile(forgeRes);
+  if (!f) return m;
+  for (const line of fs.readFileSync(f, "utf8").split(/\r?\n/)) {
+    const mm = line.match(/^#(\d+)\|([^|]+)\|/);
+    if (mm) m.set(mm[2].toLowerCase(), Number(mm[1]));
   }
   return m;
 }

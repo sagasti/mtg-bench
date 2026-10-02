@@ -79,8 +79,9 @@ export class ForgeEngine implements GameEngine {
         try { fs.closeSync(logFile); } catch { /* ignore */ }
         const engineErrors = scanEngineErrors(logPath, gameEnds);
         const w0 = games.filter((g) => g.winner === 0).length, w1 = games.filter((g) => g.winner === 1).length;
+        // An abandoned match has no winner, whatever the score when it stopped (its games stay in `games` for the record).
         resolve({ matchId: spec.matchId, pod: spec.pod, round: spec.round, seats: [spec.seats[0].id, spec.seats[1].id], games,
-          winner: w0 > w1 ? 0 : w1 > w0 ? 1 : null, delegations, forfeits, auto, engineErrors, error });
+          winner: error ? null : w0 > w1 ? 0 : w1 > w0 ? 1 : null, delegations, forfeits, auto, engineErrors, error });
       };
       const timer = setTimeout(() => finish(`match timeout after ${this.cfg.matchTimeoutSec ?? 7200}s`), (this.cfg.matchTimeoutSec ?? 7200) * 1000);
 
@@ -106,7 +107,7 @@ export class ForgeEngine implements GameEngine {
               const req: DecisionRequest = {
                 requestId: `${spec.matchId}-g${msg.game ?? current?.game ?? 0}-${msg.rid}`,
                 phase: "game", kind: msg.kind as DecisionKind, prompt: msg.prompt, state: msg.state,
-                options: msg.options, min: msg.min, max: msg.max, hints: msg.hints,
+                options: msg.options, min: msg.min, max: msg.max, hints: msg.hints, attempt: msg.attempt,
               };
               try {
                 const res = await spec.seats[seatIdx].decide(req, { pod: spec.pod, matchId: spec.matchId, game: msg.game ?? current?.game });

@@ -64,7 +64,7 @@ export interface DecisionRequest {
   hints?: Record<string, unknown>;
   /** Extra constraints the harness validates (e.g. deck size). */
   constraints?: Record<string, unknown>;
-  /** Set by an engine that asks the same step again after an answer failed in-game (1 = first re-ask). */
+  /** Re-ask of the same in-game step after a failed answer (0 = first ask), as the bridge reports it. */
   attempt?: number;
 }
 

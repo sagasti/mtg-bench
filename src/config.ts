@@ -47,7 +47,7 @@ export interface EventConfig {
   packs: number;
   packSize: number;
   format: "round-robin" | "swiss"; // round-robin: every pair plays once (7 rounds for 8 seats)
-  rounds: number;                // Swiss rounds per pod (ignored for round-robin)
+  rounds: number;                // Swiss rounds per pod, 1 to seats-1 (ignored for round-robin)
   gamesPerMatch: number;         // best-of-N
   minDeckSize: number;
   knowledge: KnowledgeTier;
@@ -153,6 +153,7 @@ export function validateConfig(cfg: BenchConfig) {
   if (cfg.event.packs * cfg.event.packSize * podSize > 100000) errs.push("pod is unreasonably large");
   if (!["names", "oracle", "oracle+tools", "oracle+tools+primer"].includes(cfg.event.knowledge)) errs.push(`event.knowledge must be names | oracle | oracle+tools | oracle+tools+primer`);
   if (!["round-robin", "swiss"].includes(cfg.event.format)) errs.push("event.format must be round-robin or swiss");
+  if (cfg.event.format === "swiss" && !(Number.isInteger(cfg.event.rounds) && cfg.event.rounds >= 1 && cfg.event.rounds <= podSize - 1)) errs.push(`event.rounds must be 1–${podSize - 1} for Swiss (${podSize} seats)`);
   if (cfg.engine.type === "forge" && !cfg.engine.forgeDir) errs.push("engine.forgeDir is required when engine.type is forge");
   if (errs.length) throw new Error("Invalid config:\n  - " + errs.join("\n  - "));
 }

@@ -2,18 +2,20 @@
 import fs from "node:fs";
 import path from "node:path";
 import { makeSeat } from "../agents/factory.ts";
+import { promptFile } from "../agents/render.ts";
 import type { Seat } from "../agents/agent.ts";
 import { Recorder } from "../analytics/recorder.ts";
 import { writeReport } from "../analytics/report.ts";
 import { loadDb } from "../cards/db.ts";
 import { loadCube, loadRankings, parseCardList } from "../cards/cube.ts";
 import type { BenchConfig } from "../config.ts";
-import { type Deck, saveDeck } from "../deckbuild/deckbuild.ts";
+import { type Deck, deckProblems, saveDeck } from "../deckbuild/deckbuild.ts";
 import type { GameEngine, MatchResult } from "../engine/types.ts";
 import { KnowledgeBase } from "../knowledge/tools.ts";
 import { Jsonl, info } from "../util/log.ts";
+import { collectProvenance } from "../util/provenance.ts";
 import { Rng } from "../util/rng.ts";
-import { pool } from "./run.ts";
+import { freshRunDir, pool } from "./run.ts";
 
 /** A saved deck: the harness's .json (from runs/<id>/pod0/decks) or any Forge .dck / plain card list. */
 export function loadDeckFile(file: string, seatId: string): Deck {
@@ -29,17 +31,25 @@ export interface HeadToHeadOpts {
   /** Matches played at once (each best-of-N stays sequential). Defaults to event.parallelMatches. */
   parallel?: number;
   runId?: string;
+  /** Replace an existing run dir of the same id. */
+  force?: boolean;
 }
 
 export async function runHeadToHead(cfg: BenchConfig, engine: GameEngine, opts: HeadToHeadOpts) {
   const ev = cfg.event;
   const runId = opts.runId ?? `${new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19)}_match_${opts.seats.join("-vs-")}`;
-  const runDir = path.join(cfg.outputDir, runId);
-  fs.mkdirSync(runDir, { recursive: true });
-  fs.writeFileSync(path.join(runDir, "config.json"), JSON.stringify({ ...cfg, headToHead: opts }, null, 2));
-  fs.cpSync(path.resolve("prompts", ev.promptVersion), path.join(runDir, "prompts"), { recursive: true });
-
   const db = loadDb();
+  // Check both decks before anything is written: Forge would silently drop cards it doesn't know.
+  const decks = opts.deckFiles.map((f, i) => loadDeckFile(f, opts.seats[i])) as [Deck, Deck];
+  for (const [i, d] of decks.entries()) {
+    const problems = deckProblems(d, db, ev.minDeckSize);
+    if (problems.length) throw new Error(`deck ${opts.deckFiles[i]} is unusable:\n  ${problems.join("\n  ")}`);
+  }
+  const runDir = freshRunDir(cfg.outputDir, runId, opts.force);
+  const provenance = collectProvenance(cfg, engine.name);
+  fs.writeFileSync(path.join(runDir, "config.json"), JSON.stringify({ ...cfg, headToHead: opts, provenance }, null, 2));
+  fs.cpSync(promptFile(ev.promptVersion, ""), path.join(runDir, "prompts"), { recursive: true });
+
   const cube = loadCube(db, ev.cube, cfg.forgeRes);
   const kb = new KnowledgeBase(db, cube.cards);
   const recorder = new Recorder(runDir, runId);
@@ -52,12 +62,11 @@ export async function runHeadToHead(cfg: BenchConfig, engine: GameEngine, opts: 
   }) as [Seat, Seat];
   if (seats[0].id === seats[1].id) throw new Error("the two seats must be different seat ids (copy a seat under a new id for a mirror)");
 
-  const decks = opts.deckFiles.map((f, i) => loadDeckFile(f, seats[i].id)) as [Deck, Deck];
   const deckDir = path.join(runDir, "decks");
   const dckFiles = decks.map((d) => saveDeck(deckDir, d)) as [string, string];
   const matchLog = new Jsonl(path.join(runDir, "matches.jsonl"));
   info(`match ${runId}: ${seats[0].id} (${path.basename(opts.deckFiles[0])}) vs ${seats[1].id} (${path.basename(opts.deckFiles[1])}), ${opts.matches} × bo${ev.gamesPerMatch} (${Math.max(1, opts.parallel ?? ev.parallelMatches)} at a time), engine=${engine.name}`);
-  recorder.event("run_start", { headToHead: true, seats: opts.seats, decks: opts.deckFiles });
+  recorder.event("run_start", { headToHead: true, seats: opts.seats, decks: opts.deckFiles, provenance });
 
   const parallel = Math.max(1, opts.parallel ?? ev.parallelMatches);
   const seeds = Array.from({ length: opts.matches }, (_, m) => rng.fork(`h2h-${m + 1}`).int(2 ** 31));
@@ -75,7 +84,7 @@ export async function runHeadToHead(cfg: BenchConfig, engine: GameEngine, opts: 
     }
     matchLog.write(res);
     const score = res.games.map((g) => (g.winner === 0 ? "W" : g.winner === 1 ? "L" : "D")).join("");
-    info(`  match ${m + 1}: ${res.winner === 0 ? seats[0].id : res.winner === 1 ? seats[1].id : "draw"} (${score})${res.error ? ` ERROR ${res.error}` : ""}`);
+    info(`  match ${m + 1}: ${res.error ? "censored" : res.winner === 0 ? seats[0].id : res.winner === 1 ? seats[1].id : "draw"} (${score})${res.error ? ` ERROR ${res.error}` : ""}`);
     return res;
   });
   recorder.event("run_end", { matches: results.length });

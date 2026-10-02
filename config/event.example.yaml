@@ -10,7 +10,7 @@ event:
   pods: 4                         # independent draft pods (reseated each pod); ratings pool all pods
   seed: 42
   format: round-robin             # round-robin (7 rounds, every pair once) | swiss
-  rounds: 3                       # swiss only
+  rounds: 3                       # swiss only: 1-7; rematches only when no other pairing exists
   gamesPerMatch: 3                # best-of-3
   packs: 3
   packSize: 15

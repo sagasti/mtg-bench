@@ -8,7 +8,7 @@ Every run writes to `runs/<runId>/`:
 | `decisions.jsonl` | **decision** | the same ids, token totals for the decision, `numOptions`, `choice`, `choiceLabels`, `valid`, `invalidAttempts`, `fallback`, `autoResolved`, `modelCalls`, `toolCalls` by name, `latencyMs`, `rationale`, `error` (why it failed), `forfeit`, `infraError` (the match was abandoned after this row), `timedOut`, `truncated` (calls cut off), `specViolation`, `attempt` (an engine re-ask of the same step). Match notes have phase `between_games`. |
 | `draft.jsonl` | draft pick | seat, pack, pick, card taken, full pack contents |
 | `matches.jsonl` | match | seats, per-game winner, on-the-play, turns, end reason, decisions per seat, duration, `delegations` (decisions Forge's AI made for an agent) |
-| `events.jsonl` | run/pod milestone | seating, standings, cube size |
+| `events.jsonl` | run/pod milestone | seating, standings, cube size, seeds; `run_start.provenance`: harness commit (+ uncommitted-changes flag), engine, Forge commit (else jar name), bridge jar SHA-256, `cards.json` and rankings-file SHA-256 (also in `config.json`, and in report.md under "Versions") |
 | `pod<N>/decks/*.dck, *.json` | deck | main deck, sideboard, basics |
 | `prep/<seat>.md` | seat | cube-study brief |
 | `forge-logs/<match>.log` | match | JVM output (Forge engine only) |
@@ -25,13 +25,29 @@ Cost = input·price.input + output·price.output + cacheRead·price.cacheRead + 
 
 Decisions with exactly one legal answer are **auto-resolved** and never sent to a model. They're counted separately, so tokens-per-decision reflects real choices only.
 
+## Errored matches are censored
+
+A match that ends in an error (`error` set in `matches.jsonl`: match timeout, bridge crash, provider outage, harness error) is **censored**:
+
+- it has no winner (`winner: null`) and awards no Swiss/standings points to either seat (`pod_end` standings list a seat's censored matches);
+- it is left out of the ratings at both levels, **including the games it finished**. Errors cut off long matches (control decks, game 3s, the slower provider's seat), so keeping the finished games and dropping the rest would bias the sample;
+- its raw games stay in `matches.jsonl`, and `report.md` / `summary.json` list censored matches and the finished games left out, per seat.
+
+A seat with many censored matches is rated on a biased sample even so; fix the cause and re-run rather than reading its rating.
+
+## Seeds and independent replicates
+
+Packs, seating, pairings and match seeds all derive from `event.seed`, each from its own stream (`pod<N>` → `seating`, `draft`, `swiss<R>`, match id), so drawing one never shifts another. Packs are fixed by design: two events with the same cube and seed draft the same packs in the same seats, which suits paired comparisons and replays but makes them one replicate, not two. Give each event of a series its own seed (e.g. base + event index). `pod_start` records `seed` and `draftSeed` (the seed whose packs the pod played; the source's in a `--decks-from` / `--pools-from` run), and `run_start` records each seat's `temperature` when set. `report` and `rate` refuse to pool runs with a pod of the same cube, draft seed and pod index unless given `--allow-same-seed`.
+
 ## report.md sections
 
-1. **Ratings**: Bradley-Terry fit over all games, Elo scale, 95% bootstrap CI (resampling whole matches).
-2. **Token usage and cost by seat**: decisions, calls, each token type, tokens/decision, cost, p50/p95 decision latency.
+A run without `run_end` in `events.jsonl`, or with a pod that has `pod_start` but no `pod_end`, stopped early: the report opens with **INCOMPLETE** and `summary.json` lists the reasons under `incomplete`.
+
+1. **Ratings**: Bradley-Terry fit over all games of uncensored matches, Elo scale, 95% bootstrap CI (resampling whole matches; a cluster is run + match id, so merged runs never share one). Censored matches per seat follow the table.
+2. **Token usage and cost by seat**: decisions, calls, each token type, tokens/decision, cost, p50/p95 decision latency. Tokens, calls and cost are summed from `usage.jsonl`, so the calls of a decision that ended in an infrastructure error (which has no decision row) still count; the report says how many such calls there were. Decision counts, validity and latency come from `decisions.jsonl`.
 3. **By seat × phase**: study / draft / deckbuild / game split of tokens and cost.
 4. **By decision kind**: average tokens, invalid answers and fallbacks per kind (e.g. are blockers expensive? do models flub targets?).
-5. **Reliability and tool use**: invalid answers, fallback rate, API errors, knowledge-tool calls by tool.
+5. **Reliability and tool use**: invalid answers, forfeits (a timed-out decision is a forfeit, labelled "timed out" in the forfeit table), bridge re-asks (`attempt > 0` rows: the same in-game step asked again, not a new decision), fallback rate, API errors, truncated calls (stopped at the output-token limit) as a share of calls, decisions abandoned by an infrastructure error (`infraError`; not counted as the agent's anywhere), knowledge-tool calls by tool. Seats whose calls or decisions carry `specViolation` (outside their pinned reasoning regime or host) are listed under **SPEC VIOLATIONS** at the top of the report.
 6. **Decisions made by Forge AI on an agent's behalf**: count per seat, share of that seat's game decisions, and the most common kinds with reasons.
 7. **Games**: average length, on-the-play win rate, end reasons, failed matches.
 
@@ -40,6 +56,7 @@ Decisions with exactly one legal answer are **auto-resolved** and never sent to 
 ```bash
 npm run bench -- report runs/<run>                     # rebuild report.md for a run
 npm run bench -- report runs/a runs/b runs/c           # merged report across runs
+npm run bench -- report runs/a runs/b --allow-same-seed  # merge runs that drafted the same packs (not independent)
 npm run bench -- rate runs/a runs/b --level match      # ratings from match wins instead of games
 npm run bench -- rate runs/* --anchor random=1000      # pin a seat's rating
 ```
