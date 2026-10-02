@@ -30,9 +30,9 @@ under `provenance`.
 
 ## Every mechanism, by bridge
 
-The AI-controller bridge (`PlayerControllerExternal`) is what this branch runs. The human-controller bridge
-(`AgentGuiGame` + `InputDriver`, `engine.controller: human`) exists only on the `spike/remote-human` branch; its rows
-are kept here so the two can be compared and so the table is complete if it is merged.
+The human-controller bridge (`engine.controller: human`, the default: `PlayerControllerHuman` driven headlessly by
+`AgentGuiGame` + `InputDriver`) is what results are produced with. The AI-controller bridge (`engine.controller: ai`,
+`PlayerControllerExternal`) is kept for comparison and will be removed.
 
 ### Actions taken without asking
 

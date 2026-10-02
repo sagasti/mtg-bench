@@ -461,10 +461,6 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         return true;
     }
 
-    /** A mana source whose choice can't matter beyond its name: a land with nothing attached and no counters. */
-    static boolean interchangeableSource(Card c) {
-        return c.isLand() && !c.isCreature() && c.getAttachedCards().isEmpty() && (c.getCounters() == null || c.getCounters().isEmpty());
-    }
 
     /** Stable identity for a cast option: Forge builds fresh SpellAbility objects for alternative costs on every call. */
     private static String castKey(SpellAbility sa) {
@@ -680,7 +676,7 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         boolean interchangeable = true;
         for (Card c : sources) {
             names.add(c.getName());
-            if (!interchangeableSource(c)) interchangeable = false;
+            if (!InputDriver.interchangeableSource(c)) interchangeable = false;
         }
         boolean meaningful = sources.size() > need.getConvertedManaCost() && (names.size() > 1 || !interchangeable);
         if (!meaningful && !ctx.alwaysAskMana) {
