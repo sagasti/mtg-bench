@@ -143,7 +143,7 @@ Write a short report: what you changed and why, the T6/T7 numbers, and anything 
 
 ## 5. Map of the code
 ```
-src/cli.ts                    commands: cards index | cubes | check | run | report | rate
+src/cli.ts                    commands: cards index | cubes | check | run | match | report | rate | conformance
 src/config.ts                 event YAML schema + validation (8 seats, knowledge, format, mana/priority options)
 src/types.ts                  DecisionRequest/Response contract + validation
 src/agents/agent.ts           Seat wrapper: auto-resolve, validation, fallback, notes, analytics
@@ -153,7 +153,7 @@ src/agents/providers/         anthropic.ts, openai.ts (OpenAI-compatible), echo.
 src/agents/bots.ts            random / rank-bot / forge-ai drafting+building policies
 src/knowledge/                lookup_card / search_cube / search_rules tools, CR index
 src/draft/ src/deckbuild/     draft (3×15, passing) and deckbuilding
-src/tournament/               run.ts (event loop), resume.ts (--decks-from / --pools-from), schedule.ts (round robin / Swiss)
+src/tournament/               run.ts (event loop), match.ts (head-to-head), resume.ts (--decks-from / --pools-from), schedule.ts (round robin / Swiss), conformance.ts (bridge check)
 src/engine/forge/forge.ts     spawns the bridge JVM, TCP protocol, delegation capture
 src/engine/mock/mock.ts       simplified engine (testing only)
 src/analytics/                recorder.ts (JSONL), report.ts (report.md / summary.json)
@@ -163,6 +163,7 @@ bridge/src/forge/bridge/      AgentBridge (main), PlayerControllerExternal (all 
                               BridgeClient (socket), LobbyPlayerExternal, MatchContext
 prompts/v1/                   versioned prompt templates
 config/                       smoke.mock.yaml, forge-bots.yaml, forge-1llm.yaml, event.example.yaml
+conformance/                  fixed decks + baseline for `bench conformance`
 ```
 
 ---
