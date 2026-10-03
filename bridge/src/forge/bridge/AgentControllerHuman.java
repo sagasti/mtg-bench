@@ -11,7 +11,6 @@ import org.apache.commons.lang3.tuple.ImmutablePair;
 import com.google.gson.JsonObject;
 
 import forge.LobbyPlayer;
-import forge.ai.ComputerUtilCost;
 import forge.game.Game;
 import forge.game.GameActionUtil;
 import forge.game.ability.ApiType;
@@ -59,21 +58,66 @@ public class AgentControllerHuman extends PlayerControllerHuman {
         Card c = sa.getHostCard();
         if (c != null && (c.hasKeyword(Keyword.CONVOKE) || c.hasKeyword(Keyword.IMPROVISE) || c.hasKeyword(Keyword.DELVE))) return true;
         try {
-            return ComputerUtilCost.canPayCost(sa, getPlayer(), false);
+            return Playability.affordable(sa, getPlayer());
         } catch (RuntimeException e) {
             return true; // can't probe it: offer it and let Forge's payment decide
         }
     }
 
-    /** Which of a card's abilities to play: the same affordability filter as priority applies to each ability. */
+    private static boolean hasTargets(SpellAbility sa) {
+        try {
+            return Playability.hasRequiredTargets(sa);
+        } catch (RuntimeException e) {
+            return true;
+        }
+    }
+
+    /** Which of a card's abilities to play: the same target and affordability filters as priority apply to each ability. */
     @Override
     public SpellAbility getAbilityToPlay(Card hostCard, List<SpellAbility> abilities, ITriggerEvent triggerEvent) {
         List<SpellAbility> offered = new ArrayList<>();
-        for (SpellAbility sa : abilities) if (sa.isManaAbility() || sa.isLandAbility() || affordable(sa)) offered.add(sa);
-        if (offered.isEmpty()) offered = abilities; // nothing passes the probe: let Forge's payment decide
-        for (int i = offered.size(); i < abilities.size(); i++)
-            ch.auto("policy", "choose_ability", "ability not offered: the affordability probe says its cost can't be paid now");
+        List<String> dropped = new ArrayList<>();
+        for (SpellAbility sa : abilities) {
+            if (sa.isManaAbility() || sa.isLandAbility()) offered.add(sa);
+            else if (!hasTargets(sa)) dropped.add("ability not offered: a required target has no legal candidate");
+            else if (!affordable(sa)) dropped.add("ability not offered: the affordability probe says its cost can't be paid now");
+            else offered.add(sa);
+        }
+        if (offered.isEmpty()) return super.getAbilityToPlay(hostCard, abilities, triggerEvent); // nothing passes: let Forge decide
+        for (String why : dropped) ch.auto("policy", "choose_ability", why);
         return super.getAbilityToPlay(hostCard, offered, triggerEvent);
+    }
+
+    /**
+     * X in a mana cost: offered only up to what the seat can pay (Forge's AI payer or the rules-only estimate, colours
+     * included), with the mana available stated. Forge's own bound for X in other costs still applies (super).
+     */
+    @Override
+    public Integer announceRequirements(SpellAbility ability, int min, int max, String announce) {
+        Cost cost = ability.getPayCosts();
+        boolean manaX = "X".equals(announce) && cost != null && cost.getCostMana() != null && cost.getCostMana().getAmountOfX() > 0;
+        if (!manaX || min > max) return super.announceRequirements(ability, min, max, announce);
+        int hi = (int) Math.min(max, (long) min + 30);
+        int payable;
+        int available;
+        try {
+            payable = Playability.maxPayableX(ability, getPlayer(), min, hi);
+            available = Playability.availableMana(ability, getPlayer());
+        } catch (RuntimeException e) {
+            return super.announceRequirements(ability, min, max, announce);
+        }
+        if (payable <= min) {
+            // Only the smallest X can be paid, or not even that (Forge's payment then cancels the cast, and says why).
+            ch.auto("forced", "choose_number", "X: only the smallest value can be paid");
+            return min;
+        }
+        String name = ability.getHostCard() != null ? ability.getHostCard().getName() : "this";
+        String costText = cost.getTotalMana() != null ? cost.getTotalMana().toString() : "";
+        String msg = "Choose X for " + name + (costText.isEmpty() ? "" : " (mana cost " + costText + ")") + ". Your untapped sources and floating mana"
+                + " make about " + available + " mana, so X can be at most " + payable + ".";
+        Integer x = getGui().getInteger(msg, min, payable, payable);
+        if (x == null && cost.isMandatory()) return min;
+        return x;
     }
 
     /** Optional costs (kicker, buyback...): only the affordable ones are offered, as on the AI-controller bridge. */

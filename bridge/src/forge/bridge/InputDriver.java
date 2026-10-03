@@ -13,7 +13,6 @@ import com.google.gson.JsonObject;
 
 import forge.ai.AiAttackController;
 import forge.ai.AiBlockController;
-import forge.ai.ComputerUtilCost;
 import forge.game.Game;
 import forge.game.keyword.Keyword;
 import forge.game.mana.ManaCostBeingPaid;
@@ -170,6 +169,8 @@ final class InputDriver implements Observer, Runnable {
     /** Whether the last Auto press was seen starting its payment task, and presses Forge ignored on this payment. */
     private boolean autoStarted = false;
     private int autoIgnored = 0;
+    /** Every source of the current payment was tapped without asking (they were all needed). */
+    private boolean tappedAll = false;
 
     private void drive(Input in) throws Exception {
         trace("drive " + in.getClass().getSimpleName());
@@ -187,6 +188,7 @@ final class InputDriver implements Observer, Runnable {
         autoFailed = false;
         autoStarted = false;
         autoIgnored = 0;
+        tappedAll = false;
         // The game thread posts the input's first message to the event thread after announcing the input, so the
         // flushes in awaitMessage can run before it is even posted; until it has run, the prompt and buttons are the
         // previous input's (and InputAttack has no defender yet). Wait for this input's own message, briefly.
@@ -438,11 +440,11 @@ final class InputDriver implements Observer, Runnable {
             String act;
             try { act = listChoices != null || in instanceof InputLondonMulligan ? "select card" : in.getActivateAction(c); } catch (RuntimeException e) { act = null; }
             if (act == null) continue;
-            if (in instanceof InputPassPriority && !playableNow(c)) {
-                // Offered by the human UI even when unaffordable; counted once per card and turn, so the filter's
-                // reach (and any false negatives) is visible in the report.
-                if (filtered.add(game.getPhaseHandler().getTurn() + ":" + c.getId()))
-                    ch.auto("policy", "priority", "card not offered: the affordability probe says its cost can't be paid now");
+            String why = in instanceof InputPassPriority ? whyNotPlayable(c) : null;
+            if (why != null) {
+                // Offered by the human UI even when unaffordable or without a legal target; counted once per card, turn
+                // and reason, so the filter's reach (and any false negatives) is visible in the report.
+                if (filtered.add(game.getPhaseHandler().getTurn() + ":" + c.getId() + ":" + why)) ch.auto("policy", "priority", why);
                 continue;
             }
             if (in instanceof InputPassPriority && withheld.contains(c.getId())) continue;
@@ -622,7 +624,12 @@ final class InputDriver implements Observer, Runnable {
             List<PlayerControllerExternal.Opt> sources = new ArrayList<>();
             java.util.Set<String> kinds = new java.util.HashSet<>();
             boolean interchangeable = true;
+            SpellAbility paidFor = paidFor(in);
+            ManaCostBeingPaid owing = owing(in);
             for (PlayerControllerExternal.Opt o : opts) if (o.id.matches("c\\d+")) {
+                Card offered = game.findById(Integer.parseInt(o.id.substring(1)));
+                // Only sources that can make a type of mana still owed (Forge marks a Forest when only {B} is owed).
+                if (offered != null && paidFor != null && owing != null && !Playability.helpsPay(offered, owing, paidFor, ch.player)) continue;
                 sources.add(o);
                 kinds.add(o.card);
                 Card src = game.findById(Integer.parseInt(o.id.substring(1)));
@@ -651,17 +658,40 @@ final class InputDriver implements Observer, Runnable {
             // button stays enabled after the sources it planned are gone (tapped for another part of the cost). Plan again
             // now: no plan means the cost can't be paid any more, whatever the button says.
             List<Card> plan = freshAutoPlan(in);
-            trace("payment: need=" + need + " sources=" + sources.stream().map(o -> o.id + ":" + o.card).toList() + " plan=" + plan
-                    + " pool=" + ch.player.getManaPool().totalMana() + " autoFailed=" + autoFailed);
-            // Unpayable: cancel (the cast rolls back). Every legal payment taps the same kind of source: let Auto pay
-            // (unless manaPayment: always). Otherwise, or once Auto has failed on this payment, the agent picks the sources.
-            if (!gui.okEnabled || plan == null || (autoFailed && sources.isEmpty())) {
-                ch.auto("forced", "mana_payment", "pay_or_else".equals(ch.kindHint) ? "cost can't be paid: payment declined" : "cost can't be paid: cast cancelled");
+            // Forge's plan is its AI's: it won't sacrifice Black Lotus for a cheap spell, among other preferences. Without
+            // one, the rules-only estimate decides whether the agent can still pay by hand.
+            boolean autoPlan = gui.okEnabled && plan != null;
+            boolean coverable = autoPlan || (paidFor != null && owing != null && Playability.covers(owing, paidFor, ch.player));
+            // The fewest sources whose combined output covers what is owed (a source may make more than one mana).
+            List<Integer> outputs = new ArrayList<>();
+            for (PlayerControllerExternal.Opt o : sources) {
+                Card src = game.findById(Integer.parseInt(o.id.substring(1)));
+                outputs.add(src == null ? 1 : Playability.manaFrom(src, paidFor, ch.player));
+            }
+            int fewest = fewestSources(outputs, need);
+            trace("payment: need=" + need + " sources=" + sources.stream().map(o -> o.id + ":" + o.card).toList() + " outputs=" + outputs
+                    + " plan=" + plan + " coverable=" + coverable + " pool=" + ch.player.getManaPool().totalMana() + " autoFailed=" + autoFailed);
+            // Unpayable: cancel (the cast rolls back), and say why with the next question. Every legal payment taps the
+            // same kind of source: let Auto pay (unless manaPayment: always). Otherwise, or once Auto has failed on this
+            // payment, the agent picks the sources.
+            if (!coverable || ((autoFailed || !autoPlan) && sources.isEmpty())) {
+                boolean decline = "pay_or_else".equals(ch.kindHint);
+                ch.auto("forced", "mana_payment", decline ? "cost can't be paid: payment declined" : "cost can't be paid: cast cancelled");
+                ch.notice(cancelNotice(paidFor, owing, decline));
                 if (gui.cancelEnabled) click("cancel", game);
                 return true;
             }
-            if (!autoFailed && (sources.size() <= need || (!ch.ctx.alwaysAskMana && kinds.size() <= 1 && interchangeable))) {
-                if (sources.size() <= need) ch.auto("forced", "mana_payment", "exactly enough sources");
+            boolean allNeeded = fewest >= sources.size();
+            if (allNeeded && (!autoPlan || autoFailed) && !tappedAll) {
+                // Every source has to be tapped and Forge's Auto won't: tap them, one per step (once: if that didn't pay
+                // the cost, the estimate was wrong and the agent is asked like any other payment).
+                tappedAll = true;
+                ch.auto("forced", "mana_payment", "exactly enough sources");
+                for (PlayerControllerExternal.Opt o : sources) queued.add(o.id);
+                return true;
+            }
+            if (!autoFailed && autoPlan && (allNeeded || (!ch.ctx.alwaysAskMana && kinds.size() <= 1 && interchangeable))) {
+                if (allNeeded) ch.auto("forced", "mana_payment", "exactly enough sources");
                 else ch.auto("policy", "mana_payment", "interchangeable sources: same-name lands, nothing attached, no counters (Forge's Auto pays)");
                 owedAtAuto = owed;
                 click("ok", game);
@@ -677,8 +707,14 @@ final class InputDriver implements Observer, Runnable {
                 return true;
             }
             ch.attempt = batches - 1;
-            List<String> r = ch.ask("mana_payment", prompt + "\nChoose the mana sources to tap for this cost: " + need
-                    + " mana in total, so pick at least " + need + " source(s).", sources, Math.min(need, sources.size()), sources.size(), null);
+            List<PlayerControllerExternal.Opt> labelled = new ArrayList<>();
+            for (int i = 0; i < sources.size(); i++) {
+                PlayerControllerExternal.Opt o = sources.get(i);
+                labelled.add(outputs.get(i) > 1 ? new PlayerControllerExternal.Opt(o.id, o.label + " (makes " + outputs.get(i) + " mana)", o.card, o.meta) : o);
+            }
+            List<String> r = ch.ask("mana_payment", prompt + "\nChoose the mana sources to tap for this cost: " + need + " mana still owed, so choose sources that"
+                    + " together make at least " + need + " mana (at least " + fewest + " source(s)). Sources are tapped in the order you list them,"
+                    + " and tapping stops once the cost is paid.", labelled, Math.min(fewest, sources.size()), sources.size(), null);
             if (r != null) queued.addAll(r); // clicked one per step, each after the previous activation finishes
             return true;
         }
@@ -797,22 +833,30 @@ final class InputDriver implements Observer, Runnable {
         return m;
     }
 
-    /** Something on this card can be done right now: a land drop, or a non-mana ability that is playable and affordable. */
-    private boolean playableNow(Card c) {
+    static final String NOT_AFFORDABLE = "card not offered: the affordability probe says its cost can't be paid now";
+    static final String NO_TARGET = "card not offered: a required target has no legal candidate";
+
+    /**
+     * Null when something on this card can be done right now (a land drop, or a non-mana ability that is playable,
+     * whose required targets all have a legal candidate, and that is affordable); else why not (NOT_AFFORDABLE / NO_TARGET).
+     */
+    private String whyNotPlayable(Card c) {
         // Forge's affordability probe asks the player's controller to choose permanents for convoke/improvise/delve;
         // with the human controller that opens a real input. For those spells, estimate instead (helpedAffordable).
         boolean helped = c.hasKeyword(Keyword.CONVOKE) || c.hasKeyword(Keyword.IMPROVISE) || c.hasKeyword(Keyword.DELVE);
+        boolean noTarget = false;
         try {
             for (SpellAbility sa : c.getAllPossibleAbilities(ch.player, true)) {
                 if (sa.isManaAbility()) continue;
-                if (sa.isLandAbility()) { if (ch.player.canPlayLand(c, false, sa)) return true; continue; }
-                if (helped && sa.isSpell()) { if (helpedAffordable(c, sa)) return true; continue; }
-                if (ComputerUtilCost.canPayCost(sa, ch.player, false)) return true;
+                if (sa.isLandAbility()) { if (ch.player.canPlayLand(c, false, sa)) return null; continue; }
+                if (!Playability.hasRequiredTargets(sa)) { noTarget = true; continue; }
+                if (helped && sa.isSpell()) { if (helpedAffordable(c, sa)) return null; continue; }
+                if (Playability.affordable(sa, ch.player)) return null;
             }
         } catch (RuntimeException e) {
-            return true; // can't probe it: offer it and let Forge decide
+            return null; // can't probe it: offer it and let Forge decide
         }
-        return false;
+        return noTarget ? NO_TARGET : NOT_AFFORDABLE;
     }
 
     /**
@@ -873,6 +917,54 @@ final class InputDriver implements Observer, Runnable {
         } catch (ReflectiveOperationException | RuntimeException e) {
             return "?";
         }
+    }
+
+    /** What a payment input still owes (InputPayMana.manaCost is protected), or null. */
+    private static ManaCostBeingPaid owing(Input in) {
+        try {
+            java.lang.reflect.Field f = InputPayMana.class.getDeclaredField("manaCost");
+            f.setAccessible(true);
+            return (ManaCostBeingPaid) f.get(in);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** The spell or ability a payment input pays for (InputPayMana.saPaidFor is protected), or null. */
+    private static SpellAbility paidFor(Input in) {
+        try {
+            java.lang.reflect.Field f = InputPayMana.class.getDeclaredField("saPaidFor");
+            f.setAccessible(true);
+            return f.get(in) instanceof SpellAbility sa ? sa : null;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** The fewest sources, largest outputs first, that make at least `need` mana (all of them if even that falls short). */
+    static int fewestSources(List<Integer> outputs, int need) {
+        List<Integer> sorted = new ArrayList<>(outputs);
+        sorted.sort(java.util.Collections.reverseOrder());
+        int sum = 0;
+        for (int i = 0; i < sorted.size(); i++) {
+            sum += sorted.get(i);
+            if (sum >= need) return i + 1;
+        }
+        return sorted.size();
+    }
+
+    /** Why Forge's cast was cancelled (or a payment declined), for the agent's next question. */
+    private String cancelNotice(SpellAbility sa, ManaCostBeingPaid owing, boolean decline) {
+        String name = sa != null && sa.getHostCard() != null ? sa.getHostCard().getName() : "the spell";
+        String owed = owing != null ? owing.toString() : "its mana cost";
+        int available;
+        try { available = Playability.availableMana(sa, ch.player); } catch (RuntimeException e) { available = -1; }
+        String have = available >= 0 ? " (your untapped sources and floating mana make about " + available + " mana)" : "";
+        if (decline) return "you couldn't pay " + owed + " for " + name + have + ", so it wasn't paid";
+        Integer x = sa != null ? sa.getXManaCostPaid() : null;
+        boolean hasX = sa != null && sa.getPayCosts() != null && sa.getPayCosts().getCostMana() != null && sa.getPayCosts().getCostMana().getAmountOfX() > 0;
+        String what = sa != null && !sa.isSpell() ? "activating an ability of " : "casting ";
+        return "Forge cancelled " + what + name + (hasX && x != null ? " with X=" + x : "") + ": " + owed + " was still owed and couldn't be paid" + have;
     }
 
     /** Mana still owed by this payment input (InputPayMana.manaCost is protected). */

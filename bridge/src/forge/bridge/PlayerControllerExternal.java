@@ -477,12 +477,7 @@ public class PlayerControllerExternal extends PlayerControllerAi {
 
     /** Every ability in the chain that must target has at least one legal candidate (Forge's human UI cancels the cast otherwise). */
     private static boolean hasRequiredTargets(SpellAbility sa) {
-        for (SpellAbility s = sa; s != null; s = s.getSubAbility()) {
-            if (!s.usesTargeting()) continue;
-            TargetRestrictions tgt = s.getTargetRestrictions();
-            if (s.getMinTargets() > 0 && !tgt.hasCandidates(s)) return false;
-        }
-        return true;
+        return Playability.hasRequiredTargets(sa);
     }
 
     /** Changes whenever anything that could make a rolled-back cast succeed changes. */
