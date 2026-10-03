@@ -45,7 +45,12 @@ Status: **open** (not asked yet) · **asked** · **answered** (with the answer a
 
 ## Q4. Reasoning-mandatory models: lowest effort, or the provider's default?
 
-- **Status:** open
+- **Status:** answered 2026-10-03: **per-seat configuration, and treat reasoning as something to test, not fix.**
+  Every seat already carries its own settings (`extraBody`, `maxTokens`) and only needs a unique id, so the same model
+  can be entered twice at different reasoning effort and play itself (example: `config/reasoning-ab.example.yaml`,
+  gpt-5-nano at low vs high, validated with `check`). No single rule for reasoning-mandatory models; each event's config
+  says what each seat runs, and the report shows each seat's reasoning tokens. The seat-spec check verifies only
+  "reasoning off" (an effort level can't be verified from the response).
 - **Background:** five models run with reasoning off. gpt-5-nano, gpt-oss-120b and glm-flash can't turn it off, so they
   run at "low" effort. gpt-5-nano at low effort wrote a 41-word study brief that stopped mid-sentence and built a
   28-land deck; its results may reflect our setting more than the model.

@@ -1,0 +1,89 @@
+# Example: the same model as two seats at different reasoning effort (owner decision Q4, 2026-10-03).
+# Seats only need unique ids; every seat carries its own extraBody/maxTokens. Not run yet (paid).
+# ─────────────────────────────────────────────────────────────────────────────
+# mtg-bench event config. Copy to config/<name>.yaml and edit.
+# Full reference: docs/AGENTS.md (seats) and docs/PROMPTS.md (knowledge).
+# API keys NEVER go in this file — only the NAME of the env var holding them.
+# ─────────────────────────────────────────────────────────────────────────────
+
+event:
+  name: reasoning-ab                 # label for the run folder; never shown to agents
+  cube: "LSVCube"   # a cube bundled with Forge (see `bench cubes`) or a path to a .dck/.txt list; never shown to agents
+  pods: 1                         # independent draft pods (reseated each pod); ratings pool all pods
+  seed: 42
+  format: round-robin             # round-robin (7 rounds, every pair once) | swiss
+  rounds: 3                       # swiss only
+  gamesPerMatch: 3                # best-of-3
+  packs: 3
+  packSize: 15
+  minDeckSize: 40
+  knowledge: oracle+tools+primer  # names | oracle | oracle+tools | oracle+tools+primer
+  cubeStudy: true                 # each LLM seat writes its own strategy brief before the draft
+  briefMaxWords: 1000
+  briefScope: all                 # draft | all (draft + deckbuild + games)
+  carryNotes: true                # agents may keep a scratchpad between decisions
+  promptVersion: v2               # prompts/v2/* (v2: per-game scratchpad + match notes written between games)
+  maxToolCallsPerDecision: 6
+  maxRetries: 3                   # re-asks after a failed answer before the decision is forfeited (null action)
+  decisionTimeoutSec: 180
+  maxGameTurns: 40                # draw after this many turns
+  recordPrompts: true            # keep rendered prompts for review (T7)
+  parallelMatches: 4              # matches played at once: round robin runs all its matches through one pool of these slots
+  # schedule: pool                # round robin: pool (default) | rounds (each round waits for its slowest match); Swiss is always by rounds
+  # providerRetryWindowSec: 1200   # wait out transient provider errors (429/5xx/host unavailable) this long per call (default 20 min)
+  priorityStops: smart
+  manaPayment: smart
+
+engine:
+  type: forge                     # forge | mock (mock = pipeline testing only)
+  forgeDir: ~/forge-src           # Forge install dir (contains res/ and forge-gui-desktop-*-jar-with-dependencies.jar)
+  # forgeJar: ~/forge/forge-gui-desktop-2.0.xx-jar-with-dependencies.jar   # auto-detected if omitted
+  # bridgeJar: bridge/build/mtg-bench-bridge.jar                          # default
+  java: /home/linuxbrew/.linuxbrew/opt/openjdk@17/bin/java
+  javaOpts: ["-Xmx3g"]
+  gameTimeoutSec: 7200            # wall-clock budget per game; the match cap is gamesPerMatch × this (matchTimeoutSec overrides)
+
+outputDir: runs
+
+# USD per 1M tokens, keyed by model id. Fill in from each provider's pricing page;
+# models without an entry show "n/a" for cost (token counts are always recorded).
+pricing:
+  deepseek/deepseek-v4-flash: { input: 0.042, output: 0.084, cacheRead: 0.0084 }   # OpenRouter models API, 2026-10-02
+  qwen/qwen3.7-flash: { input: 0.030, output: 0.130, cacheRead: 0.0060 }
+  openai/gpt-oss-120b: { input: 0.037, output: 0.170, cacheRead: 0 }
+  openai/gpt-5-nano: { input: 0.050, output: 0.400, cacheRead: 0.0050 }
+  google/gemini-2.5-flash-lite: { input: 0.100, output: 0.400, cacheRead: 0.0100 }
+  openai/gpt-6-luna: { input: 0.100, output: 0.500, cacheRead: 0.0100 }
+  z-ai/glm-5.3-flash: { input: 0.150, output: 0.500, cacheRead: 0.0300 }
+  mistralai/mistral-small-2603: { input: 0.150, output: 0.600, cacheRead: 0.0150 }
+# All eight seats are LLMs. Each seat's reasoning regime and host are part of the event spec, and every call is checked
+# against it (a breach is warned about and marked `specViolation` in usage.jsonl / decisions.jsonl; `check --ping`
+# checks one call per seat):
+#   - reasoning off wherever the endpoint allows it; gpt-oss-120b, gpt-5-nano and glm-5.3-flash refuse, so `effort: low`.
+#   - host pinned with provider.order + allow_fallbacks: false. Hosts are the ones that served most calls in the
+#     runs/sanity-* games (2026-10-02; DeepSeek from full-llm-1). The slugs are inferred from OpenRouter's display
+#     names (servedBy) and must be confirmed with `check --ping` before the paid run.
+#   - backupProviders (optional, none set): backup host slugs with the same model and quantisation, used only after the
+#     pinned host fails twice in a row within a call (docs/AGENTS.md). Leaving them out keeps one host per seat; an outage
+#     is then waited out for providerRetryWindowSec before the match is abandoned and replayed. E.g. for deepseek-flash:
+#       backupProviders: [deepinfra]   # confirm the slug and quantisation on OpenRouter and with `check --ping` first
+#   - maxTokens (reasoning and the answer share it): 4096 with reasoning off, 16384 with it on (src/config.ts maxTokensFor).
+seats:
+  - id: nano-low
+    provider: openrouter
+    model: openai/gpt-5-nano
+    apiKeyEnv: OPENROUTER_API_KEY
+    maxTokens: 16384
+    extraBody: { reasoning: { effort: low }, provider: { order: [openai], allow_fallbacks: false } }
+  - id: nano-high
+    provider: openrouter
+    model: openai/gpt-5-nano
+    apiKeyEnv: OPENROUTER_API_KEY
+    maxTokens: 32768
+    extraBody: { reasoning: { effort: high }, provider: { order: [openai], allow_fallbacks: false } }
+  - { id: forge-ai-1, provider: forge-ai }
+  - { id: forge-ai-2, provider: forge-ai }
+  - { id: rank-1, provider: rank-bot }
+  - { id: rank-2, provider: rank-bot }
+  - { id: rank-3, provider: rank-bot }
+  - { id: random-1, provider: random }
