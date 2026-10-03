@@ -26,14 +26,16 @@ export function makeSeat(sc: SeatConfig, d: SeatDeps): Seat {
   const rng = d.rng.fork(sc.id);
   const fallback = new RankBot(d.db, d.rankings, rng.fork("fallback"));
   const limit = (p: Provider) => (sc.concurrency ? limitConcurrency(p, sc.concurrency) : p);
+  const w = d.cfg.event.providerRetryWindowSec;
+  const retry = w === undefined ? {} : { windowMs: w * 1000 };
   let agent;
   switch (sc.provider) {
     case "random": agent = new BotAgent("random", new RandomBot(rng, d.db)); break;
     case "rank-bot": agent = new BotAgent("rank-bot", new RankBot(d.db, d.rankings, rng)); break;
     case "forge-ai": agent = new BotAgent("forge-ai", new RankBot(d.db, d.rankings, rng)); break;
-    case "anthropic": agent = new LlmAgent(sc, limit(new AnthropicProvider(sc)), d.cfg.event, d.cubeName, d.db, d.kb, log); break;
+    case "anthropic": agent = new LlmAgent(sc, limit(new AnthropicProvider(sc, retry)), d.cfg.event, d.cubeName, d.db, d.kb, log); break;
     case "openai": case "openrouter": case "gemini":
-      agent = new LlmAgent(sc, limit(new OpenAIProvider(sc)), d.cfg.event, d.cubeName, d.db, d.kb, log); break;
+      agent = new LlmAgent(sc, limit(new OpenAIProvider(sc, retry)), d.cfg.event, d.cubeName, d.db, d.kb, log); break;
     case "echo": agent = new LlmAgent(sc, limit(new EchoProvider(sc)), d.cfg.event, d.cubeName, d.db, d.kb, log); break;
     default: throw new Error(`unknown provider ${(sc as any).provider}`);
   }

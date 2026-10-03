@@ -217,14 +217,16 @@ function failure(e: any, clock: DecisionClock): { error: string; timedOut?: bool
 
 /**
  * A seat's reasoning regime and host are part of the event spec. Returns what this call broke, if anything:
- * reasoning tokens with reasoning disabled, or a host outside a pinned `provider.order` with `allow_fallbacks: false`.
+ * reasoning tokens with reasoning disabled, or a host outside a pinned `provider.order` (and the seat's
+ * `backupProviders`) with `allow_fallbacks: false`.
  */
 export function checkSeatSpec(seat: SeatConfig, turn: Pick<ModelTurn, "usage" | "servedBy">): string | undefined {
   const out: string[] = [];
   if (reasoningDisabled(seat) && turn.usage.reasoningTokens > 0) out.push(`${turn.usage.reasoningTokens} reasoning tokens with reasoning disabled`);
   const pin = seat.extraBody?.provider as { order?: string[]; allow_fallbacks?: boolean } | undefined;
-  if (pin?.order?.length && pin.allow_fallbacks === false && turn.servedBy && !pin.order.some((h) => sameHost(h, turn.servedBy!))) {
-    out.push(`served by ${turn.servedBy}, pinned to ${pin.order.join(", ")}`);
+  const allowed = [...(pin?.order ?? []), ...(seat.backupProviders ?? [])];
+  if (pin?.order?.length && pin.allow_fallbacks === false && turn.servedBy && !allowed.some((h) => sameHost(h, turn.servedBy!))) {
+    out.push(`served by ${turn.servedBy}, pinned to ${allowed.join(", ")}`);
   }
   return out.join("; ") || undefined;
 }

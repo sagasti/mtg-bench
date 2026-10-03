@@ -1,13 +1,13 @@
 /** Anthropic Messages API provider (tool use, optional extended thinking, prompt caching). */
 import { maxTokensFor, type SeatConfig } from "../../config.ts";
-import { type CompleteArgs, type ModelTurn, type Provider, ProviderError, postJson } from "./types.ts";
+import { type CompleteArgs, type ModelTurn, type Provider, ProviderError, postJson, type RetryPolicy } from "./types.ts";
 
 export class AnthropicProvider implements Provider {
   readonly name = "anthropic";
   readonly model: string;
   private url: string;
   private key: string;
-  constructor(private seat: SeatConfig) {
+  constructor(private seat: SeatConfig, private retry: Partial<RetryPolicy> = {}) {
     this.model = seat.model!;
     this.url = (seat.baseUrl ?? "https://api.anthropic.com").replace(/\/$/, "") + "/v1/messages";
     this.key = seat.apiKeyEnv ? process.env[seat.apiKeyEnv] ?? "" : "";
@@ -48,7 +48,8 @@ export class AnthropicProvider implements Provider {
       "x-api-key": this.key,
       "anthropic-version": "2023-06-01",
       ...(this.seat.headers ?? {}),
-    }, { signal, clock, onRetry, bodyError: (j) => (j.type === "error" ? { error: JSON.stringify(j.error ?? j).slice(0, 300), providerError: JSON.stringify(j.error ?? j).slice(0, 500) }
+    }, { signal, clock, onRetry, retry: this.retry, bodyError: (j) => (j.type === "error" ? { error: JSON.stringify(j.error ?? j).slice(0, 300), providerError: JSON.stringify(j.error ?? j).slice(0, 500),
+        transient: /overloaded|rate_limit|api_error|timeout/i.test(String(j.error?.type)) }
       : !j.content?.length && !(j.usage?.output_tokens > 0) ? { error: `empty response (no content, 0 output tokens, stop_reason "${j.stop_reason}")` } : undefined) });
 
     const content: any[] = json.content ?? [];

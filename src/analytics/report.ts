@@ -274,6 +274,17 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
     }
     L.push("");
   }
+  // Answered calls per seat and host (failed attempts can name a host too, but nobody was served).
+  const hosts = new Map<string, Map<string, number>>();
+  for (const c of s.calls) if (c.servedBy && !c.error) {
+    const m = hosts.get(c.seat) ?? new Map<string, number>(); m.set(c.servedBy, (m.get(c.servedBy) ?? 0) + 1); hosts.set(c.seat, m);
+  }
+  const multiHost = [...hosts.entries()].filter(([, m]) => m.size > 1).sort();
+  if (multiHost.length) {
+    L.push("**SERVED BY MORE THAN ONE HOST**: these seats' answers came from several hosts (backup hosts after the primary failed, `backupProviders`, or an unpinned route). Hosts serve the same model but may differ in quantisation, latency and failures, so read these seats' results with that in mind:", "");
+    for (const [seat, m] of multiHost) L.push(`- ${seat}: ${[...m.entries()].sort((a, b) => b[1] - a[1]).map(([h, n]) => `${h} ${n}`).join(", ")} call(s)`);
+    L.push("");
+  }
   L.push(`Matches: ${s.matches.length} · Games: ${s.games.length} · Decisions: ${s.decisions.length} · Model calls: ${s.calls.length}`, "");
 
   const nPods = s.byPod.pods.length;
@@ -337,10 +348,6 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
     + (anyReported ? ` · reported by provider ${usd(totalReported)}` : ""), "",
     ...(s.unrecorded.size ? [`Includes ${[...s.unrecorded.entries()].map(([seat, n]) => `${seat}: ${n}`).join(", ")} model call(s) whose decision ended in an infrastructure error and has no decision row.`, ""] : []),
     "Computed cost is tokens × the config's `pricing`. Reported cost is what the provider says it charged (OpenRouter returns it per call); when they differ, trust the reported figure and fix `pricing` or pin the host.", "");
-  const hosts = new Map<string, Map<string, number>>();
-  for (const c of s.calls) if (c.servedBy && !c.error) {
-    const m = hosts.get(c.seat) ?? new Map<string, number>(); m.set(c.servedBy, (m.get(c.servedBy) ?? 0) + 1); hosts.set(c.seat, m);
-  }
   if (hosts.size) {
     L.push("Hosts that served each seat (calls): " + [...hosts.entries()].map(([seat, m]) => `${seat}: ${[...m.entries()].map(([h, n]) => `${h} ${n}`).join(", ")}`).join("; "), "");
   }

@@ -38,6 +38,12 @@ export interface SeatConfig {
   /** Max concurrent in-flight model calls for this seat (rate-limit guard); unset = no limit. Queue time isn't charged to the agent. */
   concurrency?: number;
   /**
+   * OpenRouter only: backup host slugs serving the same model and quantisation, tried in order only after the primary
+   * host (extraBody.provider.order) fails twice in a row within one call; each is pinned alone without fallbacks.
+   * `servedBy` records who answered and the report flags seats served by more than one host. Unset = primary only.
+   */
+  backupProviders?: string[];
+  /**
    * Budgets. Once the seat's computed cost (tokens × `pricing`) reaches maxSpendUsd, or the p95 of its decision latency
    * exceeds maxP95LatencySec (over at least 20 decisions), its remaining matches aren't played (recorded as not played,
    * no result for either seat) and any later draft picks and deckbuilds are rank-bot fallbacks. Checked before each
@@ -79,8 +85,14 @@ export interface EventConfig {
   priorityStops: "smart" | "all";
   /** Forge: smart = ask which lands to tap only when the choice can matter; always = every payment. */
   manaPayment: "smart" | "always";
-  /** Report: a seat whose forfeits + fallbacks + API errors exceed this share of its decisions is listed apart from the leaderboard. */
+  /** Report: a seat whose forfeits + fallbacks + provider-failure decisions exceed this share of its decisions is listed apart from the leaderboard. */
   maxFailureRate: number;
+  /**
+   * How long a model call waits out transient provider errors (429, 408, 5xx, 529, network errors, host unavailable)
+   * with capped backoff before the decision is an infrastructure error (default 1200 = 20 min). Backoff isn't charged to
+   * the agent's clock. Optional, with no entry in the defaults, so configs that don't set it keep their config hash.
+   */
+  providerRetryWindowSec?: number;
 }
 
 export interface EngineConfig {
@@ -164,12 +176,20 @@ export function validateConfig(cfg: BenchConfig) {
     for (const k of ["maxSpendUsd", "maxP95LatencySec"] as const) if (s[k] !== undefined && !(typeof s[k] === "number" && s[k]! > 0)) errs.push(`${where}: ${k} must be a positive number`);
     if (s.maxSpendUsd !== undefined && !cfg.pricing[s.model ?? s.provider]) errs.push(`${where}: maxSpendUsd needs a pricing entry for model ${s.model ?? s.provider}`);
     if ((s as any).apiKey) errs.push(`${where}: put the key in an env var and reference it with apiKeyEnv, not apiKey`);
+    if (s.backupProviders !== undefined) {
+      const primary = ((s.extraBody?.provider as { order?: string[] } | undefined)?.order ?? []).map((h) => h.toLowerCase());
+      if (s.provider !== "openrouter") errs.push(`${where}: backupProviders needs provider openrouter (it pins OpenRouter hosts)`);
+      else if (!Array.isArray(s.backupProviders) || !s.backupProviders.length || !s.backupProviders.every((h) => typeof h === "string" && h)) errs.push(`${where}: backupProviders must be a non-empty list of host slugs`);
+      else if (new Set(s.backupProviders.map((h) => h.toLowerCase())).size !== s.backupProviders.length || s.backupProviders.some((h) => primary.includes(h.toLowerCase()))) errs.push(`${where}: backupProviders must not repeat a host or the primary`);
+    }
   }
   if (cfg.event.packs * cfg.event.packSize * podSize > 100000) errs.push("pod is unreasonably large");
   if (!["names", "oracle", "oracle+tools", "oracle+tools+primer"].includes(cfg.event.knowledge)) errs.push(`event.knowledge must be names | oracle | oracle+tools | oracle+tools+primer`);
   if (!["round-robin", "swiss"].includes(cfg.event.format)) errs.push("event.format must be round-robin or swiss");
   if (cfg.event.format === "swiss" && !(Number.isInteger(cfg.event.rounds) && cfg.event.rounds >= 1 && cfg.event.rounds <= podSize - 1)) errs.push(`event.rounds must be 1–${podSize - 1} for Swiss (${podSize} seats)`);
   if (cfg.engine.type === "forge" && !cfg.engine.forgeDir) errs.push("engine.forgeDir is required when engine.type is forge");
+  const w = cfg.event.providerRetryWindowSec;
+  if (w !== undefined && !(typeof w === "number" && w >= 0)) errs.push("event.providerRetryWindowSec must be a number of seconds >= 0");
   if (errs.length) throw new Error("Invalid config:\n  - " + errs.join("\n  - "));
 }
 
