@@ -149,6 +149,31 @@ export class LlmAgent implements DecisionAgent {
       }
       return { response, usage, modelCalls, toolCalls, invalidAttempts, truncated, specViolation, ...deckReview(), ...extra };
     };
+    /**
+     * A valid answer under review: a new proposal with a revision still allowed after it gets its stats back (the
+     * review text, and the caller asks again); otherwise it is final: the same deck again confirms the last proposal, a
+     * different one after the last review is the final revision. Undefined = accept the answer.
+     */
+    const reviewOf = (resp: DecisionResponse): string | undefined => {
+      if (!review) return undefined;
+      const key = deckKey(resp.choice, resp.basics);
+      if (proposals.length < DECK_REVISIONS && key !== proposals.at(-1)?.key) {
+        const stats = propose(resp);
+        const left = DECK_REVISIONS + 1 - proposals.length;
+        return renderTemplate(this.event.promptVersion, "deck-review.md", {
+          proposal: proposals.length, stats: renderDeckStats(stats), revisions_left: left,
+          last: left === 1 ? " This is your last revision: a different deck submitted now is final, without another review." : "",
+        });
+      }
+      if (key === proposals.at(-1)?.key) confirmed = true; else propose(resp);
+      return undefined;
+    };
+    /** Each review step gets its own time budget: reading the stats and answering again is a new decision step. */
+    const nextReviewStep = () => {
+      clock.stop();
+      clock = new DecisionClock(this.event.decisionTimeoutSec * 1000);
+      debug.proposal = proposals.length + 1;
+    };
     const maxRounds = this.event.maxToolCallsPerDecision + this.event.maxRetries + 3 + (review ? DECK_REVISIONS + 1 : 0);
     const debug: NonNullable<CompleteArgs["debug"]> = { optionIds: req.options.map((o) => o.id), min: req.min, max: req.max, kind: req.kind,
       ...(review ? { proposal: 1 } : {}) };
@@ -167,7 +192,14 @@ export class LlmAgent implements DecisionAgent {
           const salvaged = salvageJson(turn.text);
           if (salvaged) {
             const err = validateResponse(req, salvaged);
-            if (!err) return result(salvaged);
+            if (!err) {
+              // A salvaged deck goes through the same review as one submitted with the tool.
+              const reviewText = reviewOf(salvaged);
+              if (!reviewText) return result(salvaged);
+              messages.push({ role: "user", content: reviewText });
+              nextReviewStep();
+              continue;
+            }
             invalidAttempts++;
             lastError = err;
           }
@@ -196,23 +228,10 @@ export class LlmAgent implements DecisionAgent {
               invalidAttempts++;
               lastError = err;
               results.push({ id: call.id, content: `Rejected: ${err}. Choose again from the Options list.`, isError: true });
-            } else if (!final && !reviewed && review && proposals.length < DECK_REVISIONS
-              && deckKey(resp.choice, resp.basics) !== proposals.at(-1)?.key) {
-              // A new proposal with a revision still allowed after it: show its stats and ask again.
-              const stats = propose(resp);
-              const left = DECK_REVISIONS + 1 - proposals.length;
-              results.push({ id: call.id, content: renderTemplate(this.event.promptVersion, "deck-review.md", {
-                proposal: proposals.length, stats: renderDeckStats(stats), revisions_left: left,
-                last: left === 1 ? " This is your last revision: a different deck submitted now is final, without another review." : "",
-              }) });
-              reviewed = true;
             } else if (!final && !reviewed) {
-              final = resp;
-              if (review) {
-                // The same deck again confirms it; a different one after the last review is the final revision.
-                if (deckKey(resp.choice, resp.basics) === proposals.at(-1)?.key) confirmed = true; else propose(resp);
-              }
-              results.push({ id: call.id, content: "Accepted." });
+              const reviewText = reviewOf(resp);
+              if (reviewText) { results.push({ id: call.id, content: reviewText }); reviewed = true; }
+              else { final = resp; results.push({ id: call.id, content: "Accepted." }); }
             } else {
               results.push({ id: call.id, content: "Ignored: a decision was already submitted." });
             }
@@ -228,12 +247,7 @@ export class LlmAgent implements DecisionAgent {
         if (final) return result(final);
         if (invalidAttempts > this.event.maxRetries) break;
         messages.push({ role: "tool", results });
-        if (reviewed) {
-          // Each review step gets its own time budget: reading the stats and answering again is a new decision step.
-          clock.stop();
-          clock = new DecisionClock(this.event.decisionTimeoutSec * 1000);
-          debug.proposal = proposals.length + 1;
-        }
+        if (reviewed) nextReviewStep();
       }
       return result(null, { error: lastError ?? "no valid answer" });
     } finally { clock.stop(); }

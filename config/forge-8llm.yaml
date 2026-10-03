@@ -65,10 +65,6 @@ pricing:
 #     pinned host fails twice in a row within a call (docs/AGENTS.md). Leaving them out keeps one host per seat; an outage
 #     is then waited out for providerRetryWindowSec before the match is abandoned and replayed. E.g. for deepseek-flash:
 #       backupProviders: [deepinfra]   # confirm the slug and quantisation on OpenRouter and with `check --ping` first
-#   - backupProviders (optional, none set): backup host slugs with the same model and quantisation, used only after the
-#     pinned host fails twice in a row within a call (docs/AGENTS.md). Leaving them out keeps one host per seat; an outage
-#     is then waited out for providerRetryWindowSec before the match is abandoned and replayed. E.g. for deepseek-flash:
-#       backupProviders: [deepinfra]   # confirm the slug and quantisation on OpenRouter and with `check --ping` first
 #   - maxTokens (reasoning and the answer share it): 4096 with reasoning off, 16384 with it on (src/config.ts maxTokensFor).
 seats:
   - id: deepseek-flash
