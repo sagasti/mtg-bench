@@ -25,7 +25,8 @@ event:
   maxRetries: 3                   # re-asks after a failed answer before the decision is forfeited (null action)
   decisionTimeoutSec: 180
   maxGameTurns: 40                # draw after this many turns
-  parallelMatches: 4              # matches in a round run concurrently
+  parallelMatches: 4              # matches played at once: round robin runs all its matches through one pool of these slots
+  # schedule: pool                # round robin: pool (default) | rounds (each round waits for its slowest match); Swiss is always by rounds
   priorityStops: smart            # Forge: smart = ask at meaningful priority stops; all = every priority pass
   manaPayment: smart              # Forge: smart = ask which lands to tap when it can matter; always = every payment
   maxFailureRate: 0.05            # report: seats with forfeits + fallbacks + provider-failure decisions above this share of decisions are listed apart

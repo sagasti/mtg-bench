@@ -79,8 +79,14 @@ export interface EventConfig {
   briefMaxWords: number;
   /** Where the brief is shown: draft only, or draft + deckbuild + game. */
   briefScope: "draft" | "all";
-  /** Matches run concurrently within a round (each match is independent). */
+  /** Matches played at once (each match is independent): slots of the round-robin pool, or per Swiss round. */
   parallelMatches: number;
+  /**
+   * Round robin only: "pool" (default) plays all matches through one pool of parallelMatches slots; "rounds" waits for
+   * each round's slowest match before starting the next (the schedule before MB-053). Swiss always plays by rounds.
+   * Optional, with no entry in the defaults, so configs that don't set it keep their config hash.
+   */
+  schedule?: "pool" | "rounds";
   /** Forge: smart = ask at meaningful priority stops only; all = every priority pass. */
   priorityStops: "smart" | "all";
   /** Forge: smart = ask which lands to tap only when the choice can matter; always = every payment. */
@@ -188,6 +194,7 @@ export function validateConfig(cfg: BenchConfig) {
   if (!["round-robin", "swiss"].includes(cfg.event.format)) errs.push("event.format must be round-robin or swiss");
   if (cfg.event.format === "swiss" && !(Number.isInteger(cfg.event.rounds) && cfg.event.rounds >= 1 && cfg.event.rounds <= podSize - 1)) errs.push(`event.rounds must be 1–${podSize - 1} for Swiss (${podSize} seats)`);
   if (cfg.engine.type === "forge" && !cfg.engine.forgeDir) errs.push("engine.forgeDir is required when engine.type is forge");
+  if (cfg.event.schedule !== undefined && !["pool", "rounds"].includes(cfg.event.schedule)) errs.push("event.schedule must be pool or rounds");
   const w = cfg.event.providerRetryWindowSec;
   if (w !== undefined && !(typeof w === "number" && w >= 0)) errs.push("event.providerRetryWindowSec must be a number of seconds >= 0");
   if (errs.length) throw new Error("Invalid config:\n  - " + errs.join("\n  - "));
