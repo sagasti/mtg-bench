@@ -719,7 +719,13 @@ final class InputDriver implements Observer, Runnable {
             return true;
         }
         if (in instanceof InputConfirmMulligan) {
-            // Keep (OK) or mulligan (Cancel), with the tags rank-bot reads.
+            // Keep (OK) or mulligan (Cancel), with the tags rank-bot reads. Forge asks at any hand size, but a mulligan
+            // from an empty hand does nothing (AbstractMulligan.mulligan returns at once): there, keeping is forced.
+            if (ch.player.getCardsIn(ZoneType.Hand).isEmpty()) {
+                ch.auto("forced", "mulligan", "keep: no smaller hand possible (the hand is empty)");
+                click("ok", game);
+                return true;
+            }
             List<PlayerControllerExternal.Opt> two = new ArrayList<>();
             JsonObject keep = passMeta(), mull = new JsonObject();
             keep.addProperty("keep", true);
@@ -732,7 +738,12 @@ final class InputDriver implements Observer, Runnable {
             hints.addProperty("handLands", lands);
             hints.addProperty("handSize", ch.player.getCardsIn(ZoneType.Hand).size() - ch.player.getStats().getMulliganCount());
             List<String> r = ch.ask("mulligan", prompt, two, 1, 1, hints);
-            click(r == null || r.isEmpty() ? "ok" : r.get(0), game);
+            String pick = r == null || r.isEmpty() ? "ok" : r.get(0);
+            if (!pick.equals("ok") && noEffectRepeat("mulligan", prompt, two, pick, game)) {
+                ch.forfeited("mulligan", noEffectReason(gui.okLabel));
+                pick = "ok";
+            }
+            click(pick, game);
             return true;
         }
         if (in instanceof InputConfirm) {
@@ -745,7 +756,12 @@ final class InputDriver implements Observer, Runnable {
             if (gui.okEnabled) two.add(new PlayerControllerExternal.Opt(yes, "Button: " + gui.okLabel, null));
             if (gui.cancelEnabled) two.add(new PlayerControllerExternal.Opt(no, "Button: " + gui.cancelLabel, null));
             List<String> r = ch.ask(kind, prompt, two, 1, 1, yesNo ? ch.confirmHints : null);
-            String pick = r == null || r.isEmpty() ? (gui.cancelEnabled ? no : yes) : r.get(0);
+            String nullPick = gui.cancelEnabled ? no : yes;
+            String pick = r == null || r.isEmpty() ? nullPick : r.get(0);
+            if (!pick.equals(nullPick) && noEffectRepeat(kind, prompt, two, pick, game)) {
+                ch.forfeited(kind, noEffectReason(pick.equals(yes) ? gui.cancelLabel : gui.okLabel));
+                pick = nullPick;
+            }
             click(pick.equals(yes) ? "ok" : "cancel", game);
             return true;
         }
@@ -766,10 +782,41 @@ final class InputDriver implements Observer, Runnable {
                 choice = button;
             }
         }
+        String nullButton = gui.cancelEnabled && !helperCancel ? "cancel" : gui.okEnabled ? "ok" : null;
+        if (nullButton != null && !choice.equals(nullButton) && noEffectRepeat(kindOf(in), prompt, opts, choice, game)) {
+            ch.forfeited(kindOf(in), noEffectReason(nullButton.equals("cancel") ? gui.cancelLabel : gui.okLabel));
+            choice = nullButton;
+        }
         final String pick = choice;
         if (in instanceof InputPassPriority && pick.matches("c\\d+")) { lastPriorityCard = Integer.parseInt(pick.substring(1)); lastPriorityKey = stateKey(game); }
         click(pick, game);
         return true;
+    }
+
+    /** The question last answered and the game's log length then; how often it came back unchanged with the same answer. */
+    private String noEffectKey = null;
+    private int noEffectRepeats = 0;
+
+    /**
+     * Per step, not per input: true once the same question (kind, prompt, options) has come back with the same answer
+     * and nothing in the game changed (log length and state key) more than the retry budget allows. Forge may re-show a
+     * question as a new input after a click that did nothing (a mulligan from an empty hand), which the per-input count
+     * never sees.
+     */
+    private boolean noEffectRepeat(String kind, String prompt, List<PlayerControllerExternal.Opt> opts, String choice, Game game) {
+        StringBuilder key = new StringBuilder(kind).append('|').append(prompt).append('|');
+        for (PlayerControllerExternal.Opt o : opts) key.append(o.id).append(',');
+        int log;
+        try { log = game.getGameLog().getLogEntries(null).size(); } catch (RuntimeException e) { log = -1; }
+        key.append('|').append(choice).append('|').append(log).append('|').append(stateKey(game));
+        String k = key.toString();
+        noEffectRepeats = k.equals(noEffectKey) ? noEffectRepeats + 1 : 0;
+        noEffectKey = k;
+        return noEffectRepeats > ch.ctx.maxRetries;
+    }
+
+    private String noEffectReason(String pressed) {
+        return "same answer " + (noEffectRepeats + 1) + " times to a re-shown question without effect; pressed " + pressed;
     }
 
     /** Click a selection: toggle only the differences from what is already selected, then OK once it is enabled. */
