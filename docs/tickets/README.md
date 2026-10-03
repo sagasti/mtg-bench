@@ -58,3 +58,4 @@ One file per ticket. Status: open | in progress | done | dropped.
 | [MB-052](MB-052.md) | An agent can mulligan forever from an empty hand | medium | open |
 | [MB-053](MB-053.md) | Round-robin rounds wait for their slowest match | medium | open |
 | [MB-054](MB-054.md) | A pinned host's outage costs whole matches | medium | open |
+| [MB-055](MB-055.md) | Spells with no legal target (counterspells on an empty stack) are offered at priority | high | open |
