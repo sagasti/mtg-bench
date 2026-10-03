@@ -18,6 +18,7 @@ import forge.game.card.Card;
 import forge.game.card.CardCollection;
 import forge.game.card.CardCollectionView;
 import forge.game.cost.Cost;
+import forge.game.cost.CostPart;
 import forge.game.keyword.Keyword;
 import forge.game.player.Player;
 import forge.game.player.PlayerActionConfirmMode;
@@ -147,10 +148,39 @@ public class AgentControllerHuman extends PlayerControllerHuman {
         JsonObject before = ch.confirmHints;
         ch.confirmHints = tags;
         try {
-            return super.confirmAction(sa, mode, message, options, cardToShow, params);
+            // Name the card when Forge's text doesn't ("Search your library?").
+            Card host = sa != null ? sa.getHostCard() : null;
+            String named = host != null && message != null && !message.contains(host.getName())
+                    ? (getPlayer().equals(host.getController()) ? "Your " : "Your opponent's ") + host.getName() + ": " + message : message;
+            return super.confirmAction(sa, mode, named, options, cardToShow, params);
         } finally {
             ch.confirmHints = before;
         }
+    }
+
+    /**
+     * A cost question ("Do you want to pay 3 life?", "Sacrifice Black Lotus?") names the spell or ability it is part of
+     * and its whole cost; Forge's own text names only the cost part.
+     */
+    @Override
+    public boolean confirmPayment(CostPart costPart, String question, SpellAbility sa) {
+        String about = costContext(sa);
+        return super.confirmPayment(costPart, about == null ? question : about + "\n" + question, sa);
+    }
+
+    private String costContext(SpellAbility sa) {
+        if (sa == null || sa.getHostCard() == null) return null;
+        Card host = sa.getHostCard();
+        String name = host.getName();
+        String whose = getPlayer().equals(host.getController()) ? "your " : "your opponent's ";
+        if ("pay_or_else".equals(ch.kindHint) || (!sa.isManaAbility() && getGame().getStack().isResolving(host)))
+            return "This is about " + whose + name + ", which is resolving and asks whether you pay a cost.";
+        String cost = sa.getPayCosts() != null ? sa.getPayCosts().toSimpleString().replace("CARDNAME", name).replace("NICKNAME", name) : "";
+        String full = cost.isEmpty() ? "" : " (full cost: " + cost + ")";
+        if (sa.isTrigger()) return "This is about the cost of a triggered ability of " + whose + name + full + ".";
+        String what = sa.isManaAbility() ? "activating a mana ability of " : sa.isSpell() ? "casting " : "activating an ability of ";
+        String no = sa.isSpell() ? name + " isn't cast" : "the ability isn't activated";
+        return "You are " + what + name + full + ". This question is about paying part of that cost: if you don't pay it, " + no + ".";
     }
 
     @Override
