@@ -60,3 +60,4 @@ One file per ticket. Status: open | in progress | done | dropped.
 | [MB-054](MB-054.md) | A pinned host's outage costs whole matches | medium | open |
 | [MB-055](MB-055.md) | Spells with no legal target (counterspells on an empty stack) are offered at priority | high | open |
 | [MB-056](MB-056.md) | X prompts offer 0–30 regardless of mana, and failed X casts give no feedback | high | open |
+| [MB-057](MB-057.md) | The exclusion rule counts recovered provider retries as failures | medium | open |
