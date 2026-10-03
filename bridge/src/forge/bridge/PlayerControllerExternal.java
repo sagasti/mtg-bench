@@ -335,7 +335,7 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         JsonObject keepMeta = new JsonObject(); keepMeta.addProperty("keep", true);
         JsonObject mullMeta = new JsonObject(); mullMeta.addProperty("keep", false);
         List<Opt> opts = List.of(
-                new Opt("keep", cardsToReturn > 0 ? "Keep this hand (then put " + cardsToReturn + " card(s) on the bottom)" : "Keep this hand", null, keepMeta),
+                new Opt("keep", "Keep this hand", null, keepMeta),
                 new Opt("mulligan", "Mulligan (shuffle, draw 7, then bottom " + (cardsToReturn + 1) + ")", null, mullMeta));
         List<String> r = ask("mulligan", "Opening hand. Keep or mulligan?", opts, 1, 1, extra, hints);
         if (r == null) { delegated("mulligan", "no valid answer"); return asAi(() -> super.mulliganKeepHand(firstPlayer, cardsToReturn)); }
