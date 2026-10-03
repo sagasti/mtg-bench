@@ -55,9 +55,13 @@ One file per ticket. Status: open | in progress | done | dropped.
 | [MB-049](MB-049.md) | Deckbuilding is one blind shot: show the agent its deck's stats and allow revisions | medium | done |
 | [MB-050](MB-050.md) | Mixed-zone target lists include section headers as selectable options | low | open |
 | [MB-051](MB-051.md) | Record the provider's native finish reason on failed calls | low | done |
-| [MB-052](MB-052.md) | An agent can mulligan forever from an empty hand | medium | open |
+| [MB-052](MB-052.md) | An agent can mulligan forever from an empty hand | medium | done |
 | [MB-053](MB-053.md) | Round-robin rounds wait for their slowest match | medium | done |
 | [MB-054](MB-054.md) | A pinned host's outage costs whole matches | medium | done |
-| [MB-055](MB-055.md) | Spells with no legal target (counterspells on an empty stack) are offered at priority | high | open |
-| [MB-056](MB-056.md) | X prompts offer 0–30 regardless of mana, and failed X casts give no feedback | high | open |
+| [MB-055](MB-055.md) | Spells with no legal target (counterspells on an empty stack) are offered at priority | high | done |
+| [MB-056](MB-056.md) | X prompts offer 0–30 regardless of mana, and failed X casts give no feedback | high | done |
 | [MB-057](MB-057.md) | The exclusion rule counts recovered provider retries as failures | medium | done |
+| [MB-058](MB-058.md) | Castable spells aren't offered when Black Lotus (or another source Forge's AI dislikes) is needed to pay | high | done |
+| [MB-059](MB-059.md) | Cost confirmations don't say which spell or cost they are about | medium | done |
+| [MB-060](MB-060.md) | "unknown option id" forfeits: agents answer with the whole option line, not the id | medium | open |
+| [MB-061](MB-061.md) | Mana payment forces one source per mana owed, though some sources make several | medium | done |
