@@ -48,6 +48,8 @@ export class EchoProvider implements Provider {
       const choice = bad ? ["not-an-option"] : this.rng.shuffle([...ids]).slice(0, k);
       const input: any = { choice, rationale: "echo" };
       if (debug?.kind === "deckbuild") input.choice = ids.slice(0, 23), input.basics = { Island: 9, Mountain: 8 };
+      // Two-step deckbuilding (v3): propose an oversized deck first, then revise to 40 and confirm it.
+      if (debug?.kind === "deckbuild" && debug.proposal === 1) input.choice = ids.slice(0, 30);
       // Draft/deckbuild notes, so the carry-over scratchpad (and its persistence) is exercised too.
       if (debug?.kind === "draft_pick" || debug?.kind === "deckbuild") input.notes = `Echo notes after ${debug.kind} (call ${this.n}).`;
       toolCalls = [{ id, name: "submit_decision", input }];

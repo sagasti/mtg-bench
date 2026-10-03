@@ -2,6 +2,18 @@
 
 Everything an agent is told lives in versioned files under `prompts/<version>/`. The version is set by `event.promptVersion`, and each run copies the prompts it used into `runs/<run>/prompts/`. Changing a prompt means creating a new version folder: results from different prompt versions are **not** comparable.
 
+## Prompt versions
+
+| Version | What changed |
+|---|---|
+| `v1` | First version. |
+| `v2` | Per-game scratchpad; match notes rewritten between games from the game's public log (`between-games.md`). Default (`EVENT_DEFAULTS.promptVersion`) and what `config/forge-8llm.yaml` uses. |
+| `v3` | v2 plus **two-step deckbuilding** (MB-049): `deckbuild.md` gains one paragraph, and `deck-review.md` is the harness's answer to a proposed deck. Everything else is identical to v2. |
+
+Select a version with `event.promptVersion` (e.g. `promptVersion: v3`). It is part of the config hash, so a v3 event pre-registers differently from a v2 one, and v2 runs reproduce unchanged: the review is keyed off `deck-review.md` existing in the version folder, like match notes are keyed off `between-games.md`.
+
+**Two-step deckbuilding (v3).** The agent's first valid deck is a proposal. Instead of "Accepted", the tool result is a review computed from it (`src/deckbuild/stats.ts`): total cards (pool + basics) against the minimum, lands (basic / other) and non-land mana sources with the colours they make, the curve of non-land cards by mana value, coloured mana symbols per colour (in how many cards) against the number of cards that can make that colour (basic land types, Forge mana abilities, fetch lands by the deck's lands they can find; hybrid symbols listed apart), and the cards needing a colour that nothing in the deck makes. The agent then submits the same deck again (confirmed) or a revised one. Proposals 1 and 2 are reviewed; a third, different deck is final without a review, so an agent revises at most twice. Each review step gets a fresh `decisionTimeoutSec` budget. If the agent then fails (invalid answers past `maxRetries`, the clock, the provider), its latest proposal stands rather than a rank-bot fallback, since it is a legal deck the agent chose; the failure is recorded in `deckReview.error`. The decision row records `deckReview: { proposals: [{cards, lands}], confirmed }`. The figures are derived information only (what a deckbuilding client shows a human), so they're free information under the Regular-REL rule, and every choice stays with the agent. Run v2 vs v3 as a paired ablation (same seed, same seats) to measure what the review is worth; it costs about one to two extra deckbuild calls per seat per pod.
+
 ## How a decision is presented
 
 Each decision is a single, fresh conversation. The model gets no chat history. Continuity comes only from the explicit, logged channels described below.

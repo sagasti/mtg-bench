@@ -1,0 +1,4 @@
+## Phase: Deckbuilding
+Build your main deck from your drafted pool. Choose the pool cards to play (by option id) and set `basics` to the number of each basic land to add. The deck must contain at least {{min_deck_size}} cards in total (pool cards + basics); build exactly {{min_deck_size}} unless you have a reason not to. A typical deck plays 15-17 lands counting basics (fewer with mana rocks) and chooses basics to match the coloured mana costs of the cards you play. Unused cards form your sideboard. The same deck is used for every game of every match in this pod.
+
+Your submission is a proposal. The harness answers with a review computed from it: total cards, lands and other mana sources, the mana curve, coloured mana symbols in your spells against the cards that can make each colour, and any card needing a colour nothing in the deck makes. Nothing is changed for you. Then submit the same deck again to keep it, or a revised deck; you may revise up to twice.

@@ -37,7 +37,7 @@ export interface CompleteArgs {
   /** Overrides the seat's output cap for this call (a retry after a truncated answer). */
   maxTokens?: number;
   /** Offline providers (echo) may peek at the request; real providers must ignore it. */
-  debug?: { optionIds: string[]; min: number; max: number; kind: string };
+  debug?: { optionIds: string[]; min: number; max: number; kind: string; proposal?: number };
 }
 
 /** What a failed provider attempt said about itself, beyond the message (recorded on its usage row). */

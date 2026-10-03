@@ -8,7 +8,8 @@ import { type DecisionRequest, type DecisionResponse, type DecideContext, valida
 import type { AgentResult, CallObserver, DecisionAgent } from "./agent.ts";
 import { type ChatMessage, type CompleteArgs, DecisionClock, type FailureDetail, type ModelTurn, type Provider, ProviderError } from "./providers/types.ts";
 import { info, type Jsonl } from "../util/log.ts";
-import { renderRequest, renderTemplate, systemPrompt } from "./render.ts";
+import { hasPrompt, renderRequest, renderTemplate, systemPrompt } from "./render.ts";
+import { deckKey, deckStats, renderDeckStats } from "../deckbuild/stats.ts";
 
 export class LlmAgent implements DecisionAgent {
   readonly kind: string;
@@ -115,7 +116,7 @@ export class LlmAgent implements DecisionAgent {
     assertNoLeak(system + "\n" + first, [this.cubeName, this.event.name]);
     this.promptLog?.write({ seat: this.seat.id, matchId: ctx.matchId, game: ctx.game, kind: req.kind, requestId: req.requestId, prompt: first });
     const messages: ChatMessage[] = [{ role: "user", content: first }];
-    const clock = new DecisionClock(this.event.decisionTimeoutSec * 1000);
+    let clock = new DecisionClock(this.event.decisionTimeoutSec * 1000);
     let usage: TokenUsage = { ...ZERO_USAGE };
     const toolCalls: Record<string, number> = {};
     let knowledgeCalls = 0;
@@ -123,10 +124,34 @@ export class LlmAgent implements DecisionAgent {
     let modelCalls = 0, truncated = 0;
     let specViolation: string | undefined;
     let lastError: string | undefined;
-    const result = (response: DecisionResponse | null, extra: Partial<AgentResult> = {}): AgentResult =>
-      ({ response, usage, modelCalls, toolCalls, invalidAttempts, truncated, specViolation, ...extra });
-    const maxRounds = this.event.maxToolCallsPerDecision + this.event.maxRetries + 3;
-    const debug = { optionIds: req.options.map((o) => o.id), min: req.min, max: req.max, kind: req.kind };
+    // Two-step deckbuilding (prompt versions with deck-review.md, MB-049): each valid deck is a proposal; the harness
+    // answers with its derived stats and the agent confirms it (the same deck again) or revises it, up to
+    // DECK_REVISIONS times. If the agent fails after a valid proposal, its latest proposal stands.
+    const review = req.kind === "deckbuild" && hasPrompt(this.event.promptVersion, "deck-review.md");
+    const proposals: { response: DecisionResponse; key: string; cards: number; lands: number }[] = [];
+    let confirmed = false;
+    const deckReview = () => (review && proposals.length
+      ? { deckReview: { proposals: proposals.map((p) => ({ cards: p.cards, lands: p.lands })), confirmed } }
+      : {});
+    const propose = (resp: DecisionResponse) => {
+      const cards = new Map(req.options.map((o) => [o.id, o.card ?? o.label]));
+      const stats = deckStats(resp.choice.map((id) => cards.get(id)!), resp.basics ?? {}, this.db, Number(req.constraints?.minDeckSize ?? 40));
+      proposals.push({ response: resp, key: deckKey(resp.choice, resp.basics), cards: stats.cards, lands: stats.lands });
+      return stats;
+    };
+    const result = (response: DecisionResponse | null, extra: Partial<AgentResult> = {}): AgentResult => {
+      // A failure after a valid proposal (invalid answers, the clock, the provider): that proposal is the agent's deck;
+      // the failure is kept on the review record.
+      if (!response && proposals.length) {
+        const d = deckReview().deckReview!;
+        return { response: proposals.at(-1)!.response, usage, modelCalls, toolCalls, invalidAttempts, truncated, specViolation,
+          deckReview: { ...d, error: `${extra.error ?? lastError ?? "no answer"}; proposal ${proposals.length} stands` } };
+      }
+      return { response, usage, modelCalls, toolCalls, invalidAttempts, truncated, specViolation, ...deckReview(), ...extra };
+    };
+    const maxRounds = this.event.maxToolCallsPerDecision + this.event.maxRetries + 3 + (review ? DECK_REVISIONS + 1 : 0);
+    const debug: NonNullable<CompleteArgs["debug"]> = { optionIds: req.options.map((o) => o.id), min: req.min, max: req.max, kind: req.kind,
+      ...(review ? { proposal: 1 } : {}) };
 
     try {
       for (let round = 0; round < maxRounds; round++) {
@@ -153,6 +178,7 @@ export class LlmAgent implements DecisionAgent {
 
         const results: { id: string; content: string; isError?: boolean }[] = [];
         let final: DecisionResponse | null = null;
+        let reviewed = false;
         for (const call of turn.toolCalls) {
           toolCalls[call.name] = (toolCalls[call.name] ?? 0) + 1;
           if (call.name === "submit_decision") {
@@ -170,8 +196,22 @@ export class LlmAgent implements DecisionAgent {
               invalidAttempts++;
               lastError = err;
               results.push({ id: call.id, content: `Rejected: ${err}. Choose again from the Options list.`, isError: true });
-            } else if (!final) {
+            } else if (!final && !reviewed && review && proposals.length < DECK_REVISIONS
+              && deckKey(resp.choice, resp.basics) !== proposals.at(-1)?.key) {
+              // A new proposal with a revision still allowed after it: show its stats and ask again.
+              const stats = propose(resp);
+              const left = DECK_REVISIONS + 1 - proposals.length;
+              results.push({ id: call.id, content: renderTemplate(this.event.promptVersion, "deck-review.md", {
+                proposal: proposals.length, stats: renderDeckStats(stats), revisions_left: left,
+                last: left === 1 ? " This is your last revision: a different deck submitted now is final, without another review." : "",
+              }) });
+              reviewed = true;
+            } else if (!final && !reviewed) {
               final = resp;
+              if (review) {
+                // The same deck again confirms it; a different one after the last review is the final revision.
+                if (deckKey(resp.choice, resp.basics) === proposals.at(-1)?.key) confirmed = true; else propose(resp);
+              }
               results.push({ id: call.id, content: "Accepted." });
             } else {
               results.push({ id: call.id, content: "Ignored: a decision was already submitted." });
@@ -188,6 +228,12 @@ export class LlmAgent implements DecisionAgent {
         if (final) return result(final);
         if (invalidAttempts > this.event.maxRetries) break;
         messages.push({ role: "tool", results });
+        if (reviewed) {
+          // Each review step gets its own time budget: reading the stats and answering again is a new decision step.
+          clock.stop();
+          clock = new DecisionClock(this.event.decisionTimeoutSec * 1000);
+          debug.proposal = proposals.length + 1;
+        }
       }
       return result(null, { error: lastError ?? "no valid answer" });
     } finally { clock.stop(); }
@@ -199,6 +245,9 @@ function detail(d: FailureDetail): FailureDetail {
   return { ...(d.nativeFinishReason ? { nativeFinishReason: d.nativeFinishReason } : {}), ...(d.providerError ? { providerError: d.providerError } : {}),
     ...(d.servedBy ? { servedBy: d.servedBy } : {}) };
 }
+
+/** Two-step deckbuilding (prompt versions with deck-review.md): revisions allowed after the first proposal. */
+export const DECK_REVISIONS = 2;
 
 /** An answer cut off by the output cap is asked again once with twice the cap, up to this. */
 const TRUNCATION_RETRY_MAX_TOKENS = 32768;
