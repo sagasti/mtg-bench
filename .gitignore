@@ -4,3 +4,4 @@ runs/
 bridge/build/
 data/*.txt
 !data/README.md
+.claude/worktrees/
