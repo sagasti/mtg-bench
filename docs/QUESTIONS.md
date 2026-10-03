@@ -9,7 +9,8 @@ Status: **open** (not asked yet) · **asked** · **answered** (with the answer a
 
 ## Q1. Should rank-bot get a new version label now that the bridge fixes changed what it sees?
 
-- **Status:** open
+- **Status:** answered 2026-10-03: **bump it.** Done with Q2 as one change: rank-bot v3 → v4; random v1 → v2 as well
+  (its options changed for the same reason; flagged to the owner). Branch `fix/rankbot-v4`.
 - **Background:** rank-bot (and random, forge-ai) are fixed reference players. Ratings from different runs are only
   comparable if those references behave the same. Each bot has a version label recorded in every run, and reports
   refuse to pool runs whose labels differ (you can force it).
@@ -23,7 +24,9 @@ Status: **open** (not asked yet) · **asked** · **answered** (with the answer a
 
 ## Q2. Fix rank-bot's hand-size hint after mulligans, as part of the same version change?
 
-- **Status:** open (depends on Q1)
+- **Status:** answered 2026-10-03: **fix it.** `handSize` is now the actual hand (Forge's London mulligan has already
+  put the cards on the bottom when it asks), in both bridges. Conformance baseline re-recorded: rank-vs-rank now keeps
+  6-card hands it used to keep only by mistake, so that fixture plays fewer decisions.
 - **Background:** when deciding keep or mulligan, rank-bot gets a hint with its hand size. After k mulligans it is told
   7 − 2k cards instead of the real 7 − k, so it mulligans as if its hand were smaller than it is.
 - **Options:** fix it now (changes rank-bot's mulligan behaviour, covered by the Q1 label change), or leave it.

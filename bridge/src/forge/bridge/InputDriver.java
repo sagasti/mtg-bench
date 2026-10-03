@@ -736,7 +736,8 @@ final class InputDriver implements Observer, Runnable {
             for (Card c : ch.player.getCardsIn(ZoneType.Hand)) if (c.isLand()) lands++;
             JsonObject hints = new JsonObject();
             hints.addProperty("handLands", lands);
-            hints.addProperty("handSize", ch.player.getCardsIn(ZoneType.Hand).size() - ch.player.getStats().getMulliganCount());
+            // Forge's London mulligan puts the cards on the bottom before asking, so the hand is already its kept size.
+            hints.addProperty("handSize", ch.player.getCardsIn(ZoneType.Hand).size());
             List<String> r = ch.ask("mulligan", prompt, two, 1, 1, hints);
             String pick = r == null || r.isEmpty() ? "ok" : r.get(0);
             if (!pick.equals("ok") && noEffectRepeat("mulligan", prompt, two, pick, game)) {

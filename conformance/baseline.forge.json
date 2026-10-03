@@ -1,8 +1,8 @@
 {
-  "createdAt": "2026-10-03T13:52:49.149Z",
+  "createdAt": "2026-10-03T17:39:49.643Z",
   "provenance": {
     "harness": {
-      "commit": "c01394df938bd240d25239f7960a9cada430d6bf",
+      "commit": "8d492e9b5e258d85340fbd2bfdd18c01fc29f444",
       "dirty": true
     },
     "engine": "forge",
@@ -14,7 +14,7 @@
     "forge": {
       "commit": "2ccbbb01326e28b38788c50f7f0e01b5d12f32b3",
       "jar": "forge-gui-desktop-2.0.15-SNAPSHOT-jar-with-dependencies.jar",
-      "bridgeJarSha256": "dc04c9d8be276191acf1a6241ccf34672a92ed5584829ad48f56ae9b831c1bd2"
+      "bridgeJarSha256": "18b59c4133ae60f55408589d129de76d134718f9e3643fcdadab9537b634e545"
     }
   },
   "settings": {
@@ -45,7 +45,7 @@
         "0:mulligan": 3,
         "0:optional_costs": 3,
         "0:play_draw": 2,
-        "0:priority": 184,
+        "0:priority": 172,
         "0:targets": 15,
         "1:assign_damage": 2,
         "1:attackers": 15,
@@ -108,7 +108,7 @@
     },
     "rank-vs-rank": {
       "error": null,
-      "games": 3,
+      "games": 2,
       "endReasons": [
         "AllOpponentsLost"
       ],
@@ -116,31 +116,27 @@
       "bridgeErrors": 0,
       "bridgeWarnings": 0,
       "decisions": {
-        "0:attackers": 19,
-        "0:blockers": 11,
-        "0:choose_ability": 3,
-        "0:choose_cards": 1,
-        "0:confirm": 4,
-        "0:london_bottom": 1,
-        "0:mana_payment": 7,
+        "0:attackers": 15,
+        "0:blockers": 10,
+        "0:choose_ability": 1,
+        "0:confirm": 1,
+        "0:london_bottom": 2,
+        "0:mana_payment": 3,
         "0:mulligan": 4,
-        "0:optional_costs": 1,
-        "0:order_triggers": 1,
         "0:play_draw": 2,
-        "0:priority": 58,
-        "0:targets": 15,
-        "1:assign_damage": 2,
-        "1:attackers": 18,
+        "0:priority": 67,
+        "0:targets": 7,
+        "1:assign_damage": 1,
+        "1:attackers": 11,
         "1:blockers": 1,
-        "1:choose_cards": 6,
-        "1:confirm": 4,
-        "1:cost_choice": 8,
-        "1:mana_payment": 16,
-        "1:mulligan": 3,
-        "1:pay_or_else": 2,
-        "1:play_draw": 1,
-        "1:priority": 131,
-        "1:targets": 1
+        "1:choose_cards": 3,
+        "1:confirm": 2,
+        "1:cost_choice": 5,
+        "1:mana_payment": 10,
+        "1:mulligan": 2,
+        "1:pay_or_else": 1,
+        "1:priority": 86,
+        "1:targets": 2
       },
       "forfeits": 0,
       "delegations": 0

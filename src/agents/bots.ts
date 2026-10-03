@@ -19,7 +19,7 @@ export interface Bot { choose(req: DecisionRequest): DecisionResponse }
  * request `hints`, produced by the bridge's botTags / PlayerControllerExternal): its ratings then measure a different
  * player, and `report` / `rate` refuse to pool runs whose anchors differ (MB-002).
  */
-export const BOT_VERSIONS: Record<string, string> = { random: "v1", "rank-bot": "v3", "forge-ai": "v1" };
+export const BOT_VERSIONS: Record<string, string> = { random: "v2", "rank-bot": "v4", "forge-ai": "v1" };
 
 /**
  * The anchor a bot seat plays as, e.g. "rank-bot@human-v2": provider, the path that feeds it tags (mock engine, or the
