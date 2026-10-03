@@ -22,6 +22,7 @@ import forge.game.cost.CostPart;
 import forge.game.keyword.Keyword;
 import forge.game.player.Player;
 import forge.game.player.PlayerActionConfirmMode;
+import forge.game.player.PlayerController;
 import forge.game.spellability.OptionalCostValue;
 import forge.game.spellability.SpellAbility;
 import forge.player.PlayerControllerHuman;
@@ -97,7 +98,11 @@ public class AgentControllerHuman extends PlayerControllerHuman {
     public Integer announceRequirements(SpellAbility ability, int min, int max, String announce) {
         Cost cost = ability.getPayCosts();
         boolean manaX = "X".equals(announce) && cost != null && cost.getCostMana() != null && cost.getCostMana().getAmountOfX() > 0;
-        if (!manaX || min > max) return super.announceRequirements(ability, min, max, announce);
+        if (!manaX) return super.announceRequirements(ability, min, max, announce);
+        // Forge's own bound for an X that also appears in a non-mana cost part (Bond of Agony's "pay X life"), as super applies.
+        Integer nonManaMax = cost.getMaxForNonManaX(ability, getPlayer(), false);
+        if (nonManaMax != null && !getPlayer().getController().isFullControl(PlayerController.FullControlFlag.AllowPaymentStartWithMissingResources)) max = Math.min(max, nonManaMax);
+        if (min > max) return null;
         int hi = (int) Math.min(max, (long) min + 30);
         int payable;
         int available;

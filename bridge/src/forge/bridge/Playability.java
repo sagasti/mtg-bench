@@ -8,7 +8,11 @@ import forge.ai.ComputerUtilMana;
 import forge.card.mana.ManaAtom;
 import forge.card.mana.ManaCostShard;
 import forge.game.card.Card;
+import forge.game.card.CardLists;
+import forge.game.card.CardPredicates;
 import forge.game.cost.Cost;
+import forge.game.cost.CostPart;
+import forge.game.cost.CostSacrifice;
 import forge.game.cost.CostPayment;
 import forge.game.mana.Mana;
 import forge.game.mana.ManaCostBeingPaid;
@@ -98,9 +102,9 @@ final class Playability {
         for (Mana m : p.getManaPool()) out.add(new Unit(m.getColor() == 0 ? ManaAtom.COLORLESS : m.getColor()));
         List<Card> cards = new ArrayList<>(p.getCardsIn(ZoneType.Battlefield));
         cards.addAll(p.getCardsIn(ZoneType.Hand)); // Elvish Spirit Guide and the like
-        Card host = paidFor != null && paidFor.isSpell() ? paidFor.getHostCard() : null; // a spell can't pay for itself
+        java.util.Set<Card> spent = spentByCost(paidFor, p);
         for (Card c : cards) {
-            if (c.equals(host)) continue;
+            if (spent.contains(c)) continue;
             int amount = 0, types = 0;
             for (SpellAbility ma : c.getManaAbilities()) {
                 try {
@@ -147,6 +151,41 @@ final class Playability {
             }
         }
         return false;
+    }
+
+    /**
+     * Permanents the cost itself uses up, so they can't also make mana for it: the host of a spell (it's being cast),
+     * the host of an ability whose cost taps or sacrifices it (Castle Vantress, a mana creature's {T} ability), and
+     * permanents a sacrifice cost will take. For "sacrifice N of a type" the choice is the agent's: only as many of the
+     * candidates that make mana as the cost can't take from the others are left out (the ones making least).
+     */
+    private static java.util.Set<Card> spentByCost(SpellAbility paidFor, Player p) {
+        java.util.Set<Card> out = new java.util.HashSet<>();
+        if (paidFor == null) return out;
+        Card host = paidFor.getHostCard();
+        if (host != null && paidFor.isSpell()) out.add(host);
+        Cost cost = paidFor.getPayCosts();
+        if (cost == null || host == null) return out;
+        if (cost.hasTapCost()) out.add(host);
+        for (CostPart part : cost.getCostParts()) {
+            if (!(part instanceof CostSacrifice)) continue;
+            if (part.payCostFromSource()) { out.add(host); continue; }
+            try {
+                int n = part.getAbilityAmount(paidFor);
+                List<Card> candidates = new ArrayList<>(CardLists.getValidCards(
+                        CardLists.filter(p.getCardsIn(ZoneType.Battlefield), CardPredicates.canBeSacrificedBy(paidFor, false)),
+                        part.getType().split(";"), p, host, paidFor));
+                candidates.removeAll(out);
+                List<Card> makers = new ArrayList<>();
+                for (Card c : candidates) if (!c.getManaAbilities().isEmpty()) makers.add(c);
+                int forced = n - (candidates.size() - makers.size());
+                makers.sort(java.util.Comparator.comparingInt(c -> manaFrom(c, paidFor, p)));
+                for (int i = 0; i < forced && i < makers.size(); i++) out.add(makers.get(i));
+            } catch (RuntimeException e) {
+                // an unusual sacrifice type: counted as not taking a mana source
+            }
+        }
+        return out;
     }
 
     /** Mana the seat could make right now, by the same count as the estimate. */
