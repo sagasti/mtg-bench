@@ -331,7 +331,7 @@ public class PlayerControllerExternal extends PlayerControllerAi {
         extra.addProperty("onThePlay", firstPlayer.equals(player));
         JsonObject hints = new JsonObject();
         hints.addProperty("handLands", lands);
-        hints.addProperty("handSize", hand.size() - cardsToReturn);
+        hints.addProperty("handSize", hand.size()); // already reduced: London tucks before asking
         JsonObject keepMeta = new JsonObject(); keepMeta.addProperty("keep", true);
         JsonObject mullMeta = new JsonObject(); mullMeta.addProperty("keep", false);
         List<Opt> opts = List.of(
