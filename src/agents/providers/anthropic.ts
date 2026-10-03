@@ -48,8 +48,8 @@ export class AnthropicProvider implements Provider {
       "x-api-key": this.key,
       "anthropic-version": "2023-06-01",
       ...(this.seat.headers ?? {}),
-    }, { signal, clock, onRetry, bodyError: (j) => (j.type === "error" ? JSON.stringify(j.error ?? j).slice(0, 300)
-      : !j.content?.length && !(j.usage?.output_tokens > 0) ? "empty response (no content, 0 output tokens)" : undefined) });
+    }, { signal, clock, onRetry, bodyError: (j) => (j.type === "error" ? { error: JSON.stringify(j.error ?? j).slice(0, 300), providerError: JSON.stringify(j.error ?? j).slice(0, 500) }
+      : !j.content?.length && !(j.usage?.output_tokens > 0) ? { error: `empty response (no content, 0 output tokens, stop_reason "${j.stop_reason}")` } : undefined) });
 
     const content: any[] = json.content ?? [];
     const u = json.usage ?? {};

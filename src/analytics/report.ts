@@ -338,7 +338,7 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
     ...(s.unrecorded.size ? [`Includes ${[...s.unrecorded.entries()].map(([seat, n]) => `${seat}: ${n}`).join(", ")} model call(s) whose decision ended in an infrastructure error and has no decision row.`, ""] : []),
     "Computed cost is tokens × the config's `pricing`. Reported cost is what the provider says it charged (OpenRouter returns it per call); when they differ, trust the reported figure and fix `pricing` or pin the host.", "");
   const hosts = new Map<string, Map<string, number>>();
-  for (const c of s.calls) if (c.servedBy) {
+  for (const c of s.calls) if (c.servedBy && !c.error) {
     const m = hosts.get(c.seat) ?? new Map<string, number>(); m.set(c.servedBy, (m.get(c.servedBy) ?? 0) + 1); hosts.set(c.seat, m);
   }
   if (hosts.size) {

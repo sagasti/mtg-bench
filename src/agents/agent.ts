@@ -30,7 +30,7 @@ export interface AgentResult {
 
 export interface CallInfo {
   turn: number; latencyMs: number; usage: TokenUsage; stopReason?: string; httpStatus?: number; error?: string; toolCallsRequested: number; servedBy?: string;
-  truncated?: boolean; timedOut?: boolean; specViolation?: string;
+  truncated?: boolean; timedOut?: boolean; specViolation?: string; nativeFinishReason?: string; providerError?: string;
 }
 export type CallObserver = (c: CallInfo) => void;
 

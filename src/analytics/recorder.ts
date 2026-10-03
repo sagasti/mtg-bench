@@ -58,6 +58,8 @@ export interface CallRecord extends TokenUsage {
   turn: number;              // round-trip index within this decision (0 = first call)
   latencyMs: number;
   stopReason?: string;
+  nativeFinishReason?: string; // the upstream model's own finish reason (OpenRouter native_finish_reason), answered or failed
+  providerError?: string;    // the provider's `error` object (JSON, truncated), when it sent one
   httpStatus?: number;
   error?: string;            // set on every failed provider attempt (HTTP, network, in-body error): the report's "API errors"
   toolCallsRequested: number;

@@ -6,7 +6,7 @@ import { cardText, getCard } from "../cards/db.ts";
 import { type KnowledgeBase, SUBMIT_NOTES_TOOL, studyTools, toolsForTier } from "../knowledge/tools.ts";
 import { type DecisionRequest, type DecisionResponse, type DecideContext, validateResponse } from "../types.ts";
 import type { AgentResult, CallObserver, DecisionAgent } from "./agent.ts";
-import { type ChatMessage, type CompleteArgs, DecisionClock, type ModelTurn, type Provider, ProviderError } from "./providers/types.ts";
+import { type ChatMessage, type CompleteArgs, DecisionClock, type FailureDetail, type ModelTurn, type Provider, ProviderError } from "./providers/types.ts";
 import { info, type Jsonl } from "../util/log.ts";
 import { renderRequest, renderTemplate, systemPrompt } from "./render.ts";
 
@@ -86,11 +86,11 @@ export class LlmAgent implements DecisionAgent {
       try {
         turn = await this.provider.complete({
           ...args, signal: clock.signal, clock, maxTokens,
-          onRetry: (r) => onCall({ turn: round, latencyMs: r.latencyMs, usage: ZERO_USAGE, error: r.error, httpStatus: r.status, toolCallsRequested: 0 }),
+          onRetry: (r) => onCall({ turn: round, latencyMs: r.latencyMs, usage: ZERO_USAGE, error: r.error, httpStatus: r.status, toolCallsRequested: 0, ...detail(r) }),
         });
       } catch (e: any) {
         if (clock.expired) onCall({ turn: round, latencyMs: Date.now() - t0, usage: ZERO_USAGE, stopReason: "timeout", timedOut: true, toolCallsRequested: 0 });
-        else if (e instanceof ProviderError) onCall({ turn: round, latencyMs: Date.now() - t0, usage: ZERO_USAGE, error: e.message, httpStatus: e.status, toolCallsRequested: 0 });
+        else if (e instanceof ProviderError) onCall({ turn: round, latencyMs: Date.now() - t0, usage: ZERO_USAGE, error: e.message, httpStatus: e.status, toolCallsRequested: 0, ...detail(e.detail) });
         throw e;
       }
       calls++;
@@ -98,7 +98,7 @@ export class LlmAgent implements DecisionAgent {
       const cut = turn.stopReason === "length" || turn.stopReason === "max_tokens";
       const violation = checkSeatSpec(this.seat, turn);
       onCall({ turn: round, latencyMs: Date.now() - t0, usage: turn.usage, stopReason: turn.stopReason, httpStatus: turn.httpStatus,
-        toolCallsRequested: turn.toolCalls.length, servedBy: turn.servedBy, ...(cut ? { truncated: true } : {}), ...(violation ? { specViolation: violation } : {}) });
+        toolCallsRequested: turn.toolCalls.length, servedBy: turn.servedBy, ...detail(turn), ...(cut ? { truncated: true } : {}), ...(violation ? { specViolation: violation } : {}) });
       if (violation) warnSpec(this.seat.id, violation);
       specViolation ??= violation;
       if (cut) truncated++;
@@ -192,6 +192,12 @@ export class LlmAgent implements DecisionAgent {
       return result(null, { error: lastError ?? "no valid answer" });
     } finally { clock.stop(); }
   }
+}
+
+/** The provider's own account of a call (only the fields that are set), for its usage row. */
+function detail(d: FailureDetail): FailureDetail {
+  return { ...(d.nativeFinishReason ? { nativeFinishReason: d.nativeFinishReason } : {}), ...(d.providerError ? { providerError: d.providerError } : {}),
+    ...(d.servedBy ? { servedBy: d.servedBy } : {}) };
 }
 
 /** An answer cut off by the output cap is asked again once with twice the cap, up to this. */

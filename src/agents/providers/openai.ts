@@ -3,7 +3,7 @@
  * OpenRouter, Google Gemini's OpenAI endpoint, xAI, Together, vLLM, Ollama, LM Studio...
  */
 import { maxTokensFor, type SeatConfig } from "../../config.ts";
-import { type CompleteArgs, type ModelTurn, type Provider, ProviderError, postJson } from "./types.ts";
+import { type BodyFailure, type CompleteArgs, errorDetail, type ModelTurn, type Provider, ProviderError, postJson } from "./types.ts";
 
 const DEFAULT_BASE: Record<string, string> = {
   openai: "https://api.openai.com/v1",
@@ -84,6 +84,8 @@ export class OpenAIProvider implements Provider {
       },
       servedBy: typeof json.provider === "string" ? json.provider : undefined,
       stopReason: choice.finish_reason,
+      ...(typeof choice.native_finish_reason === "string" ? { nativeFinishReason: choice.native_finish_reason } : {}),
+      ...(choice.error ?? json.error ? { providerError: JSON.stringify(choice.error ?? json.error).slice(0, 500) } : {}),
       httpStatus: status,
       raw,
     };
@@ -92,14 +94,23 @@ export class OpenAIProvider implements Provider {
 
 /**
  * A 200 that carries no answer is a provider failure, not the model's: `finish_reason: "error"` (e.g. OpenRouter's
- * Gemini routes), an `error` object, or no content, no tool calls and no output tokens.
+ * Gemini routes), an `error` object, or no content, no tool calls and no output tokens. The upstream model's own
+ * finish reason (`native_finish_reason`, e.g. Gemini's SAFETY / RECITATION) goes into the message and the usage row,
+ * so a content filter can be told from an outage (MB-051).
  */
-function openAiBodyError(json: any): string | undefined {
-  if (json.error) return JSON.stringify(json.error).slice(0, 300);
+export function openAiBodyError(json: any): BodyFailure | undefined {
   const choice = json.choices?.[0];
-  if (!choice) return "no choices";
-  if (choice.finish_reason === "error") return `finish_reason "error"${choice.error ? `: ${JSON.stringify(choice.error).slice(0, 300)}` : ""}`;
+  const native = typeof choice?.native_finish_reason === "string" ? choice.native_finish_reason : undefined;
+  const detail = {
+    ...(native ? { nativeFinishReason: native } : {}),
+    ...(typeof json.provider === "string" ? { servedBy: json.provider } : {}),
+    ...(choice?.error ?? json.error ? { providerError: JSON.stringify(choice?.error ?? json.error).slice(0, 500) } : {}),
+  };
+  const why = (error: string): BodyFailure => ({ error: native ? `${error} (native_finish_reason "${native}")` : error, ...detail });
+  if (json.error) return { ...errorDetail(json), ...why(JSON.stringify(json.error).slice(0, 300)) };
+  if (!choice) return why("no choices");
+  if (choice.finish_reason === "error") return why(`finish_reason "error"${choice.error ? `: ${JSON.stringify(choice.error).slice(0, 300)}` : ""}`);
   const msg = choice.message ?? {};
-  if (!msg.content && !msg.tool_calls?.length && !(json.usage?.completion_tokens > 0)) return "empty response (no content, no tool calls, 0 output tokens)";
+  if (!msg.content && !msg.tool_calls?.length && !(json.usage?.completion_tokens > 0)) return why("empty response (no content, no tool calls, 0 output tokens)");
   return undefined;
 }

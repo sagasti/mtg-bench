@@ -14,6 +14,10 @@ export interface ModelTurn {
   toolCalls: ToolCall[];
   usage: TokenUsage;
   stopReason?: string;
+  /** The upstream model's own finish reason when a gateway reports it (OpenRouter `native_finish_reason`, e.g. Gemini's SAFETY). */
+  nativeFinishReason?: string;
+  /** An `error` object the provider attached to an otherwise successful answer (JSON, truncated). */
+  providerError?: string;
   httpStatus?: number;
   /** Upstream host that served the call, when a gateway reports it. */
   servedBy?: string;
@@ -36,7 +40,17 @@ export interface CompleteArgs {
   debug?: { optionIds: string[]; min: number; max: number; kind: string };
 }
 
-export interface RetryInfo { error: string; status?: number; latencyMs: number; waitMs: number }
+/** What a failed provider attempt said about itself, beyond the message (recorded on its usage row). */
+export interface FailureDetail {
+  /** The upstream model's finish reason (OpenRouter `native_finish_reason`): tells a content filter from an outage. */
+  nativeFinishReason?: string;
+  /** The provider's `error` object, JSON, truncated. */
+  providerError?: string;
+  /** The host that failed, when the gateway names it. */
+  servedBy?: string;
+}
+
+export interface RetryInfo extends FailureDetail { error: string; status?: number; latencyMs: number; waitMs: number }
 
 export interface Pausable { pause(refundMs?: number): void; resume(): void }
 
@@ -67,15 +81,26 @@ export function limitConcurrency(p: Provider, n: number): Provider {
 }
 
 export class ProviderError extends Error {
-  constructor(msg: string, readonly status?: number, readonly retryable = false) { super(msg); }
+  constructor(msg: string, readonly status?: number, readonly retryable = false, readonly detail: FailureDetail = {}) { super(msg); }
+}
+
+/** An HTTP 200 body that is really a provider failure (see PostOptions.bodyError). */
+export interface BodyFailure extends FailureDetail { error: string }
+
+/** The `error` object of a JSON error body, and the host it names (OpenRouter puts it in metadata.provider_name). */
+export function errorDetail(json: any): FailureDetail {
+  const err = json?.error;
+  if (!err || typeof err !== "object") return {};
+  const host = err.metadata?.provider_name;
+  return { providerError: JSON.stringify(err).slice(0, 500), ...(typeof host === "string" ? { servedBy: host } : {}) };
 }
 
 export interface PostOptions {
   signal?: AbortSignal;
   clock?: Pausable;
   onRetry?: (r: RetryInfo) => void;
-  /** Returns an error message when an HTTP 200 body is really a provider failure; it's retried like a 5xx. */
-  bodyError?: (json: any) => string | undefined;
+  /** Says why an HTTP 200 body is really a provider failure, or undefined; it's retried like a 5xx. */
+  bodyError?: (json: any) => BodyFailure | undefined;
 }
 
 /**
@@ -87,7 +112,7 @@ export async function postJson(url: string, body: unknown, headers: Record<strin
   let delay = 2000;
   for (let attempt = 0; ; attempt++) {
     const t0 = Date.now();
-    let failure: { error: string; status?: number; retryable: boolean; waitMs: number };
+    let failure: { error: string; status?: number; retryable: boolean; waitMs: number; detail: FailureDetail };
     try {
       const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body), signal });
       const text = await res.text();
@@ -96,22 +121,25 @@ export async function postJson(url: string, body: unknown, headers: Record<strin
         try { json = JSON.parse(text); } catch { throw new ProviderError(`invalid JSON from provider: ${text.slice(0, 300)}`, res.status); }
         const err = bodyError?.(json);
         if (!err) return { status: res.status, json };
-        failure = { error: `provider error in HTTP ${res.status} body: ${err}`, status: res.status, retryable: true, waitMs: delay };
+        const { error, ...detail } = err;
+        failure = { error: `provider error in HTTP ${res.status} body: ${error}`, status: res.status, retryable: true, waitMs: delay, detail };
       } else {
         const ra = Number(res.headers.get("retry-after"));
+        let json: any;
+        try { json = JSON.parse(text); } catch { /* not JSON */ }
         failure = {
           error: `HTTP ${res.status}: ${text.slice(0, 500)}`, status: res.status,
           retryable: res.status === 429 || res.status === 408 || res.status === 529 || res.status >= 500,
-          waitMs: Number.isFinite(ra) && ra > 0 ? Math.min(ra * 1000, 60000) : delay,
+          waitMs: Number.isFinite(ra) && ra > 0 ? Math.min(ra * 1000, 60000) : delay, detail: errorDetail(json),
         };
       }
     } catch (e: any) {
       if (e instanceof ProviderError) throw e;
       if (signal?.aborted) throw new ProviderError(`aborted: ${signal.reason?.message ?? signal.reason ?? e?.message ?? e}`);
-      failure = { error: `network error: ${e?.message ?? e}`, retryable: true, waitMs: delay };
+      failure = { error: `network error: ${e?.message ?? e}`, retryable: true, waitMs: delay, detail: {} };
     }
-    if (!failure.retryable || attempt >= 6) throw new ProviderError(failure.error, failure.status, failure.retryable);
-    onRetry?.({ error: failure.error, status: failure.status, latencyMs: Date.now() - t0, waitMs: failure.waitMs });
+    if (!failure.retryable || attempt >= 6) throw new ProviderError(failure.error, failure.status, failure.retryable, failure.detail);
+    onRetry?.({ error: failure.error, status: failure.status, latencyMs: Date.now() - t0, waitMs: failure.waitMs, ...failure.detail });
     clock?.pause(Date.now() - t0);
     try { await sleep(failure.waitMs, signal); } finally { clock?.resume(); }
     if (signal?.aborted) throw new ProviderError(`aborted: ${signal.reason?.message ?? signal.reason}`);
