@@ -52,6 +52,8 @@ npm run bench -- cards index --forge-res <dir>     build data/cards.json
 npm run bench -- cubes --forge-res <dir>           list Forge's bundled cubes
 npm run bench -- check <config> [--ping]           validate config, keys, data, engine, print the config hash; --ping tests each LLM seat
 npm run bench -- run <config> [--engine mock|forge] [--pods N] [--run-id ID] [--force] [--forge-res DIR] [--expect-hash H] [--verbose]
+    [--decks-from RUNDIR | --pools-from RUNDIR] [--allow-seat-changes]   replay a saved run's decks (matches only) or pools (deckbuild + matches)
+npm run bench -- match <config> --seats A,B --decks a.dck,b.dck [--matches N] [--parallel N] [--run-id ID] [--force]   head-to-head, fixed decks
 npm run bench -- report <runDir...> [--allow-same-seed] [--allow-anchor-changes] [--max-failure-rate X]   report.md (merged if several)
 npm run bench -- rate <runDir...> [--level game|match] [--anchor seat=1500] [--allow-same-seed] [--allow-anchor-changes]
 npm run bench -- conformance <config> [--update]   fixed bot matches vs conformance/baseline.forge.json; run after any Forge bump
@@ -69,7 +71,7 @@ src/
   analytics/     JSONL recorder, report
   rating/        Bradley-Terry + bootstrap
 bridge/          Java: PlayerControllerExternal etc., runs inside Forge
-prompts/v1/      versioned prompt templates
+prompts/v1..v3/  versioned prompt templates (event.promptVersion; v3 = v2 + two-step deckbuilding, docs/PROMPTS.md)
 config/          event configs
 ```
 

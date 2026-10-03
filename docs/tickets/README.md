@@ -52,12 +52,12 @@ One file per ticket. Status: open | in progress | done | dropped.
 | [MB-046](MB-046.md) | An unbreakable loop runs until the match timeout | medium | done |
 | [MB-047](MB-047.md) | rank-bot accepts pointless optional copies | medium | done |
 | [MB-048](MB-048.md) | Rendering Ertai Resurrected's rules text crashes the input driver | medium | done |
-| [MB-049](MB-049.md) | Deckbuilding is one blind shot: show the agent its deck's stats and allow revisions | medium | open |
+| [MB-049](MB-049.md) | Deckbuilding is one blind shot: show the agent its deck's stats and allow revisions | medium | done |
 | [MB-050](MB-050.md) | Mixed-zone target lists include section headers as selectable options | low | open |
-| [MB-051](MB-051.md) | Record the provider's native finish reason on failed calls | low | open |
+| [MB-051](MB-051.md) | Record the provider's native finish reason on failed calls | low | done |
 | [MB-052](MB-052.md) | An agent can mulligan forever from an empty hand | medium | open |
-| [MB-053](MB-053.md) | Round-robin rounds wait for their slowest match | medium | open |
-| [MB-054](MB-054.md) | A pinned host's outage costs whole matches | medium | open |
+| [MB-053](MB-053.md) | Round-robin rounds wait for their slowest match | medium | done |
+| [MB-054](MB-054.md) | A pinned host's outage costs whole matches | medium | done |
 | [MB-055](MB-055.md) | Spells with no legal target (counterspells on an empty stack) are offered at priority | high | open |
 | [MB-056](MB-056.md) | X prompts offer 0–30 regardless of mana, and failed X casts give no feedback | high | open |
-| [MB-057](MB-057.md) | The exclusion rule counts recovered provider retries as failures | medium | open |
+| [MB-057](MB-057.md) | The exclusion rule counts recovered provider retries as failures | medium | done |
