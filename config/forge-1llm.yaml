@@ -26,7 +26,8 @@ event:
   decisionTimeoutSec: 180
   maxGameTurns: 40                # draw after this many turns
   recordPrompts: true            # keep rendered prompts for review (T7)
-  parallelMatches: 4              # matches in a round run concurrently
+  parallelMatches: 4              # matches played at once: round robin runs all its matches through one pool of these slots
+  # schedule: pool                # round robin: pool (default) | rounds (each round waits for its slowest match); Swiss is always by rounds
   priorityStops: smart
   manaPayment: smart
 

@@ -200,13 +200,16 @@ export function summarize(runDirs: string[], cfg?: BenchConfig, opts: { maxFailu
   for (const d of decisions) if (d.forfeit || d.timedOut) bump(d.seat, `${d.kind} (${d.timedOut ? "timed out" : "no valid answer"})`);
   for (const m of matches) for (const f of m.forfeits ?? []) bump(m.seats[f.seat], `${f.what} (${f.reason.replace(/ in \d+ attempts.*/, "")})`);
 
-  // Exclusion rule: a seat whose forfeits (harness and bridge) + fallbacks + API errors exceed maxFailureRate of its
-  // decisions didn't play as configured often enough to rank; it's listed apart from the leaderboard, numbers kept.
-  const excluded = new Map<string, { rate: number; forfeits: number; fallbacks: number; apiErrors: number; decisions: number }>();
+  // Exclusion rule: a seat whose decisions it didn't make as configured (forfeits, harness and bridge; fallbacks; and
+  // decisions that ended in a provider failure after all retries) exceed maxFailureRate of its decisions is listed apart
+  // from the leaderboard, numbers kept. Failed provider attempts that a retry recovered (API errors) never affected a
+  // decision, so they don't count (MB-057).
+  const excluded = new Map<string, { rate: number; forfeits: number; fallbacks: number; providerFailures: number; apiErrors: number; decisions: number }>();
   for (const [seat, a] of bySeat) {
     const forfeits = [...(forfeited.get(seat)?.values() ?? [])].reduce((x, y) => x + y, 0);
-    const rate = a.decisions ? (forfeits + a.fallbacks + a.apiErrors) / a.decisions : 0;
-    if (rate > maxFailureRate) excluded.set(seat, { rate, forfeits, fallbacks: a.fallbacks, apiErrors: a.apiErrors, decisions: a.decisions });
+    const decided = a.decisions + a.infraErrors;
+    const rate = decided ? (forfeits + a.fallbacks + a.infraErrors) / decided : 0;
+    if (rate > maxFailureRate) excluded.set(seat, { rate, forfeits, fallbacks: a.fallbacks, providerFailures: a.infraErrors, apiErrors: a.apiErrors, decisions: decided });
   }
 
   // Who decided each in-game decision (docs/DECISION-PROVENANCE.md): the agent, forced (one legal action),
@@ -271,6 +274,17 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
     }
     L.push("");
   }
+  // Answered calls per seat and host (failed attempts can name a host too, but nobody was served).
+  const hosts = new Map<string, Map<string, number>>();
+  for (const c of s.calls) if (c.servedBy && !c.error) {
+    const m = hosts.get(c.seat) ?? new Map<string, number>(); m.set(c.servedBy, (m.get(c.servedBy) ?? 0) + 1); hosts.set(c.seat, m);
+  }
+  const multiHost = [...hosts.entries()].filter(([, m]) => m.size > 1).sort();
+  if (multiHost.length) {
+    L.push("**SERVED BY MORE THAN ONE HOST**: these seats' answers came from several hosts (backup hosts after the primary failed, `backupProviders`, or an unpinned route). Hosts serve the same model but may differ in quantisation, latency and failures, so read these seats' results with that in mind:", "");
+    for (const [seat, m] of multiHost) L.push(`- ${seat}: ${[...m.entries()].sort((a, b) => b[1] - a[1]).map(([h, n]) => `${h} ${n}`).join(", ")} call(s)`);
+    L.push("");
+  }
   L.push(`Matches: ${s.matches.length} · Games: ${s.games.length} · Decisions: ${s.decisions.length} · Model calls: ${s.calls.length}`, "");
 
   const nPods = s.byPod.pods.length;
@@ -279,11 +293,11 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
   s.ratings.filter((r) => !s.excluded.has(r.id)).forEach((r, i) => L.push(`| ${i + 1} | ${r.id} | ${r.rating.toFixed(0)} | ${r.lo.toFixed(0)}–${r.hi.toFixed(0)} | ${r.games} | ${r.score.toFixed(1)} |`));
   if (s.excluded.size) {
     const pc = (x: number) => `${(100 * x).toFixed(1)}%`;
-    L.push("", `**Excluded from the leaderboard**: forfeits + fallbacks + API errors above ${pc(s.maxFailureRate)} of the seat's decisions (\`event.maxFailureRate\`), so the seat often didn't play as configured. Its games still count for its opponents' ratings; its numbers are kept here.`, "");
-    L.push("| Seat | Rating | 95% CI | Games | Score | Failure rate | Forfeits | Fallbacks | API errors | Decisions |", "|---|---|---|---|---|---|---|---|---|---|");
+    L.push("", `**Excluded from the leaderboard**: forfeits + fallbacks + provider failures (decisions that ended in a provider error after all retries) above ${pc(s.maxFailureRate)} of the seat's decisions (\`event.maxFailureRate\`), so the seat often didn't play as configured. API errors that a retry recovered don't count; they are shown for information. Its games still count for its opponents' ratings; its numbers are kept here.`, "");
+    L.push("| Seat | Rating | 95% CI | Games | Score | Failure rate | Forfeits | Fallbacks | Provider failures | Decisions | API errors (info) |", "|---|---|---|---|---|---|---|---|---|---|---|");
     for (const [seat, x] of [...s.excluded.entries()].sort((a, b) => b[1].rate - a[1].rate)) {
       const r = s.ratings.find((r) => r.id === seat);
-      L.push(`| ${seat} | ${r ? r.rating.toFixed(0) : "–"} | ${r ? `${r.lo.toFixed(0)}–${r.hi.toFixed(0)}` : "–"} | ${r?.games ?? 0} | ${r ? r.score.toFixed(1) : "–"} | ${pc(x.rate)} | ${x.forfeits} | ${x.fallbacks} | ${x.apiErrors} | ${x.decisions} |`);
+      L.push(`| ${seat} | ${r ? r.rating.toFixed(0) : "–"} | ${r ? `${r.lo.toFixed(0)}–${r.hi.toFixed(0)}` : "–"} | ${r?.games ?? 0} | ${r ? r.score.toFixed(1) : "–"} | ${pc(x.rate)} | ${x.forfeits} | ${x.fallbacks} | ${x.providerFailures} | ${x.decisions} | ${x.apiErrors} |`);
     }
   }
   L.push("", nPods > 1
@@ -308,7 +322,7 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
   if (s.censored.size) {
     const sum = (f: "matches" | "replayed") => [...s.censored.values()].reduce((a, c) => a + c[f], 0) / 2;
     const replays = s.matches.filter((m) => m.replayOf);
-    L.push(`**Errored matches: ${sum("replayed")} replayed, ${sum("matches")} censored.** A match that errors for a reason other than a harness bug (provider error, match timeout, bridge crash) is played again from scratch with the same decks and seed at the end of its round (${replays.filter((m) => !m.error).length} of ${replays.length} replay(s) completed). A match whose replay errors too, or that hit a harness bug, is censored: left out of the ratings and standings entirely, including the games it finished (policy in docs/ANALYTICS.md). Errors cut off long matches, so a seat with many censored matches may be rated on a biased sample.`, "");
+    L.push(`**Errored matches: ${sum("replayed")} replayed, ${sum("matches")} censored.** A match that errors for a reason other than a harness bug (provider error, match timeout, bridge crash) is played again from scratch with the same decks and seed at the end of the schedule (of its round when played by rounds) (${replays.filter((m) => !m.error).length} of ${replays.length} replay(s) completed). A match whose replay errors too, or that hit a harness bug, is censored: left out of the ratings and standings entirely, including the games it finished (policy in docs/ANALYTICS.md). Errors cut off long matches, so a seat with many censored matches may be rated on a biased sample.`, "");
     L.push("| Seat | Replayed | Censored matches | Finished games left out |", "|---|---|---|---|");
     for (const [seat, c] of [...s.censored.entries()].sort()) L.push(`| ${seat} | ${c.replayed} | ${c.matches} | ${c.games} |`);
     L.push("");
@@ -334,10 +348,6 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
     + (anyReported ? ` · reported by provider ${usd(totalReported)}` : ""), "",
     ...(s.unrecorded.size ? [`Includes ${[...s.unrecorded.entries()].map(([seat, n]) => `${seat}: ${n}`).join(", ")} model call(s) whose decision ended in an infrastructure error and has no decision row.`, ""] : []),
     "Computed cost is tokens × the config's `pricing`. Reported cost is what the provider says it charged (OpenRouter returns it per call); when they differ, trust the reported figure and fix `pricing` or pin the host.", "");
-  const hosts = new Map<string, Map<string, number>>();
-  for (const c of s.calls) if (c.servedBy) {
-    const m = hosts.get(c.seat) ?? new Map<string, number>(); m.set(c.servedBy, (m.get(c.servedBy) ?? 0) + 1); hosts.set(c.seat, m);
-  }
   if (hosts.size) {
     L.push("Hosts that served each seat (calls): " + [...hosts.entries()].map(([seat, m]) => `${seat}: ${[...m.entries()].map(([h, n]) => `${h} ${n}`).join(", ")}`).join("; "), "");
   }
@@ -360,13 +370,13 @@ export function renderReport(s: ReturnType<typeof summarize>, title: string): st
   L.push("");
 
   L.push("## Reliability and tool use by seat", "");
-  L.push("| Seat | Invalid answers | Forfeits (rate) | Re-asks | Fallbacks (rate) | API errors | Truncated calls (rate) | Infra-error decisions | Tool calls |", "|---|---|---|---|---|---|---|---|---|");
+  L.push("| Seat | Invalid answers | Forfeits (rate) | Re-asks | Fallbacks (rate) | API errors (attempts) | Truncated calls (rate) | Provider-failure decisions | Tool calls |", "|---|---|---|---|---|---|---|---|---|");
   for (const [seat, a] of [...s.bySeat.entries()].sort()) {
     const tools = Object.entries(a.tools).filter(([n]) => n !== "submit_decision" && n !== "submit_brief").map(([n, v]) => `${n}: ${v}`).join(", ") || "–";
     const rate = (n: number, of = a.decisions) => `${n} (${of ? ((100 * n) / of).toFixed(1) : 0}%)`;
     L.push(`| ${seat} | ${a.invalidAttempts} | ${rate(a.forfeits)} | ${a.reasks} | ${rate(a.fallbacks)} | ${a.apiErrors} | ${rate(a.truncated, a.modelCalls)} | ${a.infraErrors} | ${tools} |`);
   }
-  L.push("", "Re-asks are the bridge asking the same in-game step again after an answer failed in-game; they aren't counted as decisions. Truncated calls stopped at the output-token limit. Infra-error decisions were abandoned by a provider or harness failure and aren't counted as the agent's.", "");
+  L.push("", "Re-asks are the bridge asking the same in-game step again after an answer failed in-game; they aren't counted as decisions. API errors count failed provider attempts (HTTP errors, in-body errors, empty responses), most of which a retry recovered; information only. Truncated calls stopped at the output-token limit. Provider-failure decisions ended in a provider error after all retries: the match was abandoned (and replayed), so they aren't counted as the agent's play, but they do count towards the exclusion rule.", "");
 
   L.push("## Engine exceptions", "");
   if (!s.engineErrors.size) L.push("None: Forge logged no exceptions during any game.", "");

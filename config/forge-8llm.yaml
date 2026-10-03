@@ -26,7 +26,9 @@ event:
   decisionTimeoutSec: 180
   maxGameTurns: 40                # draw after this many turns
   recordPrompts: true            # keep rendered prompts for review (T7)
-  parallelMatches: 4              # matches in a round run concurrently
+  parallelMatches: 4              # matches played at once: round robin runs all its matches through one pool of these slots
+  # schedule: pool                # round robin: pool (default) | rounds (each round waits for its slowest match); Swiss is always by rounds
+  # providerRetryWindowSec: 1200   # wait out transient provider errors (429/5xx/host unavailable) this long per call (default 20 min)
   priorityStops: smart
   manaPayment: smart
 
@@ -59,6 +61,10 @@ pricing:
 #   - host pinned with provider.order + allow_fallbacks: false. Hosts are the ones that served most calls in the
 #     runs/sanity-* games (2026-10-02; DeepSeek from full-llm-1). The slugs are inferred from OpenRouter's display
 #     names (servedBy) and must be confirmed with `check --ping` before the paid run.
+#   - backupProviders (optional, none set): backup host slugs with the same model and quantisation, used only after the
+#     pinned host fails twice in a row within a call (docs/AGENTS.md). Leaving them out keeps one host per seat; an outage
+#     is then waited out for providerRetryWindowSec before the match is abandoned and replayed. E.g. for deepseek-flash:
+#       backupProviders: [deepinfra]   # confirm the slug and quantisation on OpenRouter and with `check --ping` first
 #   - maxTokens (reasoning and the answer share it): 4096 with reasoning off, 16384 with it on (src/config.ts maxTokensFor).
 seats:
   - id: deepseek-flash

@@ -25,12 +25,17 @@ export interface AgentResult {
   truncated?: number;
   /** First breach of the seat's reasoning/host spec (see checkSeatSpec). */
   specViolation?: string;
+  /** Two-step deckbuilding (prompts with deck-review.md): each proposal's size, and whether the last was confirmed. */
+  deckReview?: DeckReview;
   error?: string;
 }
 
+/** lands is -1 for a final revision accepted without another review. `error`: the agent failed after a proposal, which stands. */
+export interface DeckReview { proposals: { cards: number; lands: number }[]; confirmed: boolean; error?: string }
+
 export interface CallInfo {
   turn: number; latencyMs: number; usage: TokenUsage; stopReason?: string; httpStatus?: number; error?: string; toolCallsRequested: number; servedBy?: string;
-  truncated?: boolean; timedOut?: boolean; specViolation?: string;
+  truncated?: boolean; timedOut?: boolean; specViolation?: string; nativeFinishReason?: string; providerError?: string;
 }
 export type CallObserver = (c: CallInfo) => void;
 
@@ -176,6 +181,7 @@ export class Seat {
       ...base, ...result.usage, numOptions: req.options.length, choice: response.choice, choiceLabels: labels(req, response.choice),
       valid: !fallback && !forfeit, invalidAttempts: result.invalidAttempts, fallback, forfeit, autoResolved: false, modelCalls: result.modelCalls,
       toolCalls: result.toolCalls, latencyMs: Date.now() - t0, rationale: response.rationale, ...outcome(result, fallback || forfeit),
+      ...(result.deckReview ? { deckReview: result.deckReview } : {}),
     });
     return response;
   }

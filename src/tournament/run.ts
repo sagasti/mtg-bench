@@ -25,6 +25,34 @@ import { Rng } from "../util/rng.ts";
 import { type RunSource, saveNotes, SourceRun } from "./resume.ts";
 import { roundRobin, swissRound } from "./schedule.ts";
 
+/** A match played: its result, the two seats' indices in the pod's seating, and its seed (for a replay). */
+interface Played { res: MatchResult; a: number; b: number; seed: number }
+/** A match waiting for a slot in a pooled round robin. */
+interface Queued { a: number; b: number; round: number; matchId: string; seed: number; replayOf?: string }
+
+/**
+ * Runs queued items through `slots` workers until the queue is empty and nothing is in flight; `fn` may enqueue more
+ * (they join the end of the queue). `pick` chooses which queued item a free slot takes (default: the first).
+ */
+export function workQueue<T>(items: T[], slots: number, fn: (x: T, enqueue: (y: T) => void) => Promise<void>,
+  pick: (queue: T[]) => number = () => 0): Promise<void> {
+  const queue = [...items];
+  let active = 0;
+  return new Promise<void>((resolve, reject) => {
+    let failed = false;
+    const launch = () => {
+      if (failed) return;
+      while (active < Math.max(1, slots) && queue.length) {
+        const [x] = queue.splice(pick(queue), 1);
+        active++;
+        fn(x, (y) => queue.push(y)).then(() => { active--; launch(); }, (e) => { failed = true; reject(e); });
+      }
+      if (!active && !queue.length) resolve();
+    };
+    launch();
+  });
+}
+
 export async function pool<T, R>(items: T[], limit: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
   let next = 0;
@@ -127,47 +155,89 @@ export async function runEvent(cfg: BenchConfig, engine: GameEngine, opts: { run
     const played = new Set<string>();
     const nRounds = ev.format === "round-robin" ? n - 1 : ev.rounds;
     const rr = ev.format === "round-robin" ? roundRobin(n) : null;
-    for (let round = 0; round < nRounds; round++) {
-      const pairs = rr ? rr[round] : swissRound(n, points, played, round, prng.fork(`swiss${round}`));
-      const rematches = pairs.filter(([a, b]) => played.has(a < b ? `${a}-${b}` : `${b}-${a}`)).length;
-      if (rematches) info(`round ${round + 1}: no pairing without rematches; ${rematches} rematch(es)`);
-      const playOne = async (a: number, b: number, matchId: string, seed: number, replayOf?: string) => {
-        let res: MatchResult;
-        const stopped = [order[a], order[b]].map((s) => ({ seat: s.id, reason: s.overBudget() })).find((x) => x.reason);
-        if (stopped) res = { matchId, pod, round: round + 1, seats: [order[a].id, order[b].id], games: [], winner: null, notPlayed: { seat: stopped.seat, reason: stopped.reason! } };
-        else try {
-          res = await engine.playMatch({
-            matchId, pod, round: round + 1, seats: [order[a], order[b]], decks: [decks[a], decks[b]],
-            deckFiles: [deckFiles[a], deckFiles[b]], gamesPerMatch: ev.gamesPerMatch, seed,
-            maxGameTurns: ev.maxGameTurns, runDir, priorityStops: ev.priorityStops, manaPayment: ev.manaPayment, maxRetries: ev.maxRetries,
-          });
-        } catch (e: any) {
-          res = { matchId, pod, round: round + 1, seats: [order[a].id, order[b].id], games: [], winner: null, error: String(e?.message ?? e), errorKind: "harness" };
-        }
-        if (replayOf) res.replayOf = replayOf;
-        matchLog.write(res);
-        allMatches.push(res);
-        const score = res.games.map((g) => (g.winner === 0 ? "W" : g.winner === 1 ? "L" : "D")).join("");
-        const outcome = res.notPlayed ? `not played, ${res.notPlayed.seat} over budget` : res.error ? (replayOf || !replayable(res) ? "censored" : "errored, replaying at the end of the round")
-          : res.winner === 0 ? order[a].id : res.winner === 1 ? order[b].id : "draw";
-        info(`  r${round + 1} ${order[a].id} vs ${order[b].id}${replayOf ? " (replay)" : ""}: ${outcome} (${score})${res.error ? ` ERROR ${res.error}` : ""}`);
-        return { res, a, b, seed };
-      };
-      const first = await pool(pairs, ev.parallelMatches, ([a, b]) => {
-        const matchId = `p${pod}-r${round + 1}-${order[a].id}-vs-${order[b].id}`;
-        return playOne(a, b, matchId, prng.fork(matchId).int(2 ** 31));
-      });
-      // A match that errored for a reason other than a harness bug is played once more from scratch, same decks and
-      // seed, once the round's other matches are done; only if the replay errors too is the pairing censored.
-      const replays = await pool(first.filter((r) => replayable(r.res)), ev.parallelMatches,
-        (r) => playOne(r.a, r.b, `${r.res.matchId}-replay`, r.seed, r.res.matchId));
-      const results = first.map((r) => replays.find((x) => x.res.replayOf === r.res.matchId) ?? r);
+    // Round robin: every pairing is known up front and none depends on a result, so by default all matches go through
+    // one pool of parallelMatches slots (MB-053) instead of each round waiting for its slowest match. Swiss keeps rounds.
+    const pooled = !!rr && (ev.schedule ?? "pool") === "pool";
+    const seedOf = (matchId: string) => prng.fork(matchId).int(2 ** 31);
+    let started = 0;
+    const playOne = async (a: number, b: number, round: number, matchId: string, seed: number, replayOf?: string): Promise<Played> => {
+      let res: MatchResult;
+      const t0 = Date.now();
+      // Schedule order and wall time, so a run's actual schedule can be read back from events.jsonl.
+      recorder.event("match_start", { pod, matchId, round: round + 1, seats: [order[a].id, order[b].id], order: started++, ...(replayOf ? { replayOf } : {}) });
+      const stopped = [order[a], order[b]].map((s) => ({ seat: s.id, reason: s.overBudget() })).find((x) => x.reason);
+      if (stopped) res = { matchId, pod, round: round + 1, seats: [order[a].id, order[b].id], games: [], winner: null, notPlayed: { seat: stopped.seat, reason: stopped.reason! } };
+      else try {
+        res = await engine.playMatch({
+          matchId, pod, round: round + 1, seats: [order[a], order[b]], decks: [decks[a], decks[b]],
+          deckFiles: [deckFiles[a], deckFiles[b]], gamesPerMatch: ev.gamesPerMatch, seed,
+          maxGameTurns: ev.maxGameTurns, runDir, priorityStops: ev.priorityStops, manaPayment: ev.manaPayment, maxRetries: ev.maxRetries,
+        });
+      } catch (e: any) {
+        res = { matchId, pod, round: round + 1, seats: [order[a].id, order[b].id], games: [], winner: null, error: String(e?.message ?? e), errorKind: "harness" };
+      }
+      if (replayOf) res.replayOf = replayOf;
+      matchLog.write(res);
+      allMatches.push(res);
+      recorder.event("match_end", { pod, matchId, durationMs: Date.now() - t0 });
+      const score = res.games.map((g) => (g.winner === 0 ? "W" : g.winner === 1 ? "L" : "D")).join("");
+      const outcome = res.notPlayed ? `not played, ${res.notPlayed.seat} over budget` : res.error ? (replayOf || !replayable(res) ? "censored" : `errored, replaying at the end of the ${pooled ? "schedule" : "round"}`)
+        : res.winner === 0 ? order[a].id : res.winner === 1 ? order[b].id : "draw";
+      info(`  r${round + 1} ${order[a].id} vs ${order[b].id}${replayOf ? " (replay)" : ""}: ${outcome} (${score})${res.error ? ` ERROR ${res.error}` : ""}`);
+      return { res, a, b, seed };
+    };
+    /** Standings: 3 points a win, 1 a draw; an errored (censored) or not-played match gives none. */
+    const tally = (results: Played[]) => {
       for (const { res, a, b } of results) {
         played.add(a < b ? `${a}-${b}` : `${b}-${a}`);
         if (res.notPlayed) { notPlayed[a]++; notPlayed[b]++; }
         else if (res.error) { censored[a]++; censored[b]++; }
         else if (res.winner === 0) points[a] += 3; else if (res.winner === 1) points[b] += 3; else { points[a] += 1; points[b] += 1; }
       }
+    };
+    if (pooled) {
+      // Queue in round order; a free slot takes the first queued match whose seats aren't already playing (else the
+      // first queued), so a seat plays two matches at once only when nothing else could start. A seat's `concurrency`
+      // still caps its calls in flight across matches. An errored match's replay joins the end of the queue and starts only
+      // once every first attempt has started.
+      const queue: Queued[] = rr!.flatMap((pairs, round) => pairs.map(([a, b]) => {
+        const matchId = `p${pod}-r${round + 1}-${order[a].id}-vs-${order[b].id}`;
+        return { a, b, round, matchId, seed: seedOf(matchId) };
+      }));
+      recorder.event("schedule", { pod, mode: "pool", slots: ev.parallelMatches, queue: queue.map((q) => q.matchId) });
+      const busy = new Array(n).fill(0);
+      const first = new Map<string, Played>(), replays = new Map<string, Played>();
+      await workQueue(queue, ev.parallelMatches, async (m, enqueue) => {
+        busy[m.a]++; busy[m.b]++;
+        try {
+          const r = await playOne(m.a, m.b, m.round, m.matchId, m.seed, m.replayOf);
+          if (m.replayOf) replays.set(m.replayOf, r);
+          else {
+            first.set(m.matchId, r);
+            if (replayable(r.res)) enqueue({ ...m, matchId: `${m.matchId}-replay`, replayOf: m.matchId });
+          }
+        } finally { busy[m.a]--; busy[m.b]--; }
+      }, (q) => {
+        // Replays sit at the end of the queue and wait until every first attempt has started.
+        const firsts = q.findIndex((m) => m.replayOf);
+        const from = firsts === 0 ? q : q.slice(0, firsts < 0 ? q.length : firsts);
+        return Math.max(0, from.findIndex((m) => !busy[m.a] && !busy[m.b]));
+      });
+      tally(queue.map((m) => replays.get(m.matchId) ?? first.get(m.matchId)!));
+    } else for (let round = 0; round < nRounds; round++) {
+      const pairs = rr ? rr[round] : swissRound(n, points, played, round, prng.fork(`swiss${round}`));
+      const rematches = pairs.filter(([a, b]) => played.has(a < b ? `${a}-${b}` : `${b}-${a}`)).length;
+      if (rematches) info(`round ${round + 1}: no pairing without rematches; ${rematches} rematch(es)`);
+      recorder.event("schedule", { pod, mode: "rounds", round: round + 1, slots: ev.parallelMatches, queue: pairs.map(([a, b]) => `p${pod}-r${round + 1}-${order[a].id}-vs-${order[b].id}`) });
+      const first = await pool(pairs, ev.parallelMatches, ([a, b]) => {
+        const matchId = `p${pod}-r${round + 1}-${order[a].id}-vs-${order[b].id}`;
+        return playOne(a, b, round, matchId, seedOf(matchId));
+      });
+      // A match that errored for a reason other than a harness bug is played once more from scratch, same decks and
+      // seed, once the round's other matches are done; only if the replay errors too is the pairing censored.
+      const replays = await pool(first.filter((r) => replayable(r.res)), ev.parallelMatches,
+        (r) => playOne(r.a, r.b, round, `${r.res.matchId}-replay`, r.seed, r.res.matchId));
+      tally(first.map((r) => replays.find((x) => x.res.replayOf === r.res.matchId) ?? r));
     }
     recorder.event("pod_end", { pod, standings: order.map((s, i) => ({ seat: s.id, points: points[i], ...(censored[i] ? { censored: censored[i] } : {}), ...(notPlayed[i] ? { notPlayed: notPlayed[i] } : {}) })).sort((x, y) => y.points - x.points) });
   }

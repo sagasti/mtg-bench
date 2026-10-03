@@ -119,7 +119,8 @@ async function main() {
         for (const s of cfg.seats) {
           if (!["anthropic", "openai", "openrouter", "gemini"].includes(s.provider)) continue;
           try {
-            const p = s.provider === "anthropic" ? new AnthropicProvider(s) : new OpenAIProvider(s);
+            // A short retry window: a ping that waits out a 20-minute outage isn't a useful check.
+            const p = s.provider === "anthropic" ? new AnthropicProvider(s, { windowMs: 60_000 }) : new OpenAIProvider(s, { windowMs: 60_000 });
             const t = await p.complete({ system: "You are a test.", messages: [{ role: "user", content: "Call submit_decision with choice [\"o1\"]." }], tools: [SUBMIT_TOOL] });
             ok(`${s.id}: ${t.toolCalls.length ? `tool call ${t.toolCalls[0].name}(${JSON.stringify(t.toolCalls[0].input)})` : `text "${t.text.slice(0, 60)}"`} · in ${t.usage.inputTokens}+${t.usage.cacheReadTokens} out ${t.usage.outputTokens} (reasoning ${t.usage.reasoningTokens})${t.servedBy ? ` · served by ${t.servedBy}` : ""}`);
             const violation = checkSeatSpec(s, t);

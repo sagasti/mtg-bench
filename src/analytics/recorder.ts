@@ -58,6 +58,8 @@ export interface CallRecord extends TokenUsage {
   turn: number;              // round-trip index within this decision (0 = first call)
   latencyMs: number;
   stopReason?: string;
+  nativeFinishReason?: string; // the upstream model's own finish reason (OpenRouter native_finish_reason), answered or failed
+  providerError?: string;    // the provider's `error` object (JSON, truncated), when it sent one
   httpStatus?: number;
   error?: string;            // set on every failed provider attempt (HTTP, network, in-body error): the report's "API errors"
   toolCallsRequested: number;
@@ -97,6 +99,8 @@ export interface DecisionRecord extends TokenUsage {
   timedOut?: boolean;        // the decision's time budget ran out (a forfeit, or a fallback in deckbuilding)
   truncated?: number;        // model calls stopped by the output cap
   specViolation?: string;    // first breach of the seat's reasoning/host spec
+  /** Two-step deckbuilding (prompts v3): cards and lands of each proposal, whether the last was confirmed, why it stopped early. */
+  deckReview?: { proposals: { cards: number; lands: number }[]; confirmed: boolean; error?: string };
 }
 
 export class Recorder {

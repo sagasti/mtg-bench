@@ -21,7 +21,9 @@ under `provenance`.
 
 - `decisions.jsonl`: one row per question asked. `autoResolved: true` = forced (a single option); `forfeit: true` =
   forfeit decided by the harness, with the reason in `error` (`timedOut: true` when the time budget ran out);
-  `fallback: true` = rank-bot built the deck (deckbuilding only, not in-game). Match notes written between games have
+  `fallback: true` = rank-bot built the deck (deckbuilding only, not in-game); with prompts v3 (two-step deckbuilding,
+  MB-049) a seat that fails after a valid deck proposal plays its latest proposal instead, not a fallback, recorded on the
+  decision row as `deckReview.error`. Match notes written between games have
   phase `between_games`, so they are not in-game decisions. A row with `infraError: true` is the decision during which
   the provider kept failing; the match was abandoned there, so it is no one's decision (it is recorded for its tokens;
   the report's provenance table doesn't skip it yet, see MB-019).
