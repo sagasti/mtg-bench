@@ -82,3 +82,7 @@ config/          event configs
 - 🔜 Ideas: deck-swap control (play each other's decks, to separate drafting skill from piloting skill); the last few delegated decision types (naming a card, convoke); puzzle and regret-vs-search tracks.
 
 The mock engine is a simplified stand-in for testing. Never report its results.
+
+## License
+
+GPL-3.0 (see [LICENSE](LICENSE)). The Java bridge in `bridge/` links against [Forge](https://github.com/Card-Forge/forge), which is GPL-3.0.
