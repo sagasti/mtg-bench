@@ -78,8 +78,7 @@ config/          event configs
 ## Status
 
 - ✅ Harness, draft, deckbuild, round robin/Swiss, ratings and analytics: tested end to end with the mock engine.
-- ✅ Forge bridge: agents make every game decision (casting sub-decisions, mana, combat damage, scry, triggers…). Anything Forge's AI decides for an agent is counted as "delegated". Type-checked against Forge source; the Node side of the protocol tested against a fake bridge.
-- ⏳ First real Forge run: see FORGE_SETUP.md.
+- ✅ Forge bridge: agents make every game decision (casting sub-decisions, mana, combat damage, scry, triggers…). Anything Forge's AI decides for an agent is counted as "delegated". Validated on 8-bot round robins through real Forge and on LLM matches (DeepSeek V4 Flash via OpenRouter); current state in [HANDOFF.md](HANDOFF.md) §2.
 - 🔜 Ideas: deck-swap control (play each other's decks, to separate drafting skill from piloting skill); the last few delegated decision types (naming a card, convoke); puzzle and regret-vs-search tracks.
 
 The mock engine is a simplified stand-in for testing. Never report its results.
