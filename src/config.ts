@@ -160,8 +160,22 @@ const EVENT_DEFAULTS: Omit<EventConfig, "name" | "cube"> = {
   cubeStudy: true, briefMaxWords: 1000, briefScope: "all", parallelMatches: 4, priorityStops: "smart", manaPayment: "smart", maxFailureRate: 0.05,
 };
 
+/** Pilot patch: `${VAR}` inside any string of the config is replaced with the environment variable (endpoints and
+ *  other deployment details stay out of the repo). An unset variable is an error, not an empty string. */
+function expandEnv(v: unknown, where: string): unknown {
+  if (typeof v === "string") return v.replace(/\$\{([A-Z0-9_]+)\}/g, (_, name) => {
+    const val = process.env[name];
+    if (val === undefined || val === "") throw new Error(`${where}: environment variable ${name} is not set (referenced as \${${name}})`);
+    return val;
+  });
+  if (Array.isArray(v)) return v.map((x, i) => expandEnv(x, `${where}[${i}]`));
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, expandEnv(x, `${where}.${k}`)]));
+  return v;
+}
+
 export function loadConfig(file: string): BenchConfig {
-  const raw = YAML.parse(fs.readFileSync(file, "utf8")) ?? {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const raw = expandEnv(YAML.parse(fs.readFileSync(file, "utf8")) ?? {}, file) as any;
   const event: EventConfig = { ...EVENT_DEFAULTS, ...(raw.event ?? {}) };
   if (!event.name) throw new Error("event.name is required");
   if (!event.cube) throw new Error("event.cube is required");
