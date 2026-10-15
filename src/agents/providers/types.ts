@@ -36,6 +36,8 @@ export interface CompleteArgs {
   onRetry?: (r: RetryInfo) => void;
   /** Overrides the seat's output cap for this call (a retry after a truncated answer). */
   maxTokens?: number;
+  /** Overrides the seat's reasoning effort for this call (pilot patch: the fast answer after a timeout). */
+  reasoningEffort?: string;
   /** Offline providers (echo) may peek at the request; real providers must ignore it. */
   debug?: { optionIds: string[]; min: number; max: number; kind: string; proposal?: number };
 }

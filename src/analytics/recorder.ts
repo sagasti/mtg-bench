@@ -97,6 +97,7 @@ export interface DecisionRecord extends TokenUsage {
   error?: string;            // why the decision failed (forfeit, fallback, timeout, infrastructure)
   infraError?: boolean;      // the provider kept failing; the match was abandoned after this row
   timedOut?: boolean;        // the decision's time budget ran out (a forfeit, or a fallback in deckbuilding)
+  timeoutFallback?: boolean; // pilot patch: first budget ran out, answer came from the fast reasoning-off re-ask
   truncated?: number;        // model calls stopped by the output cap
   specViolation?: string;    // first breach of the seat's reasoning/host spec
   /** Two-step deckbuilding (prompts v3): cards and lands of each proposal, whether the last was confirmed, why it stopped early. */

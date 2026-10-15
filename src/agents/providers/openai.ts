@@ -38,7 +38,7 @@ export class OpenAIProvider implements Provider {
     return { ...body, provider: { ...(body.provider ?? {}), order: [this.seat.backupProviders![i - 1]], allow_fallbacks: false } };
   }
 
-  async complete({ system, messages, tools, signal, clock, onRetry, maxTokens: cap }: CompleteArgs): Promise<ModelTurn> {
+  async complete({ system, messages, tools, signal, clock, onRetry, maxTokens: cap, reasoningEffort }: CompleteArgs): Promise<ModelTurn> {
     const msgs: any[] = [{ role: "system", content: system }];
     for (const m of messages) {
       if (m.role === "user") msgs.push({ role: "user", content: m.content });
@@ -62,7 +62,8 @@ export class OpenAIProvider implements Provider {
     const maxTokens = cap ?? maxTokensFor(this.seat);
     if (this.seat.provider === "openai") body.max_completion_tokens = maxTokens; else body.max_tokens = maxTokens;
     if (this.seat.temperature !== undefined) body.temperature = this.seat.temperature;
-    if (this.seat.reasoningEffort) body.reasoning_effort = this.seat.reasoningEffort;
+    const effort = reasoningEffort ?? this.seat.reasoningEffort;
+    if (effort) body.reasoning_effort = effort;
     if (this.seat.provider === "openrouter") body.usage = { include: true };
     Object.assign(body, this.seat.extraBody ?? {});
 

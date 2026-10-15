@@ -18,6 +18,7 @@ import type { DecisionKind, DecisionRequest } from "../../types.ts";
 import { debug } from "../../util/log.ts";
 import { scanEngineErrors } from "./log.ts";
 import type { AutoAction, Delegation, EngineError, GameEngine, GameResult, MatchResult, MatchSpec } from "../types.ts";
+import { humanHooks } from "../../human/server.ts";
 
 export function findForgeJar(forgeDir: string): string | undefined {
   const cands: string[] = [];
@@ -71,6 +72,9 @@ export class ForgeEngine implements GameEngine {
     const warnings = new Map<string, number>();
     const decisions: [number, number] = [0, 0];
     let current: { game: number; onThePlay: 0 | 1; t0: number } | null = null;
+    const mulligans: [number, number] = [0, 0]; // pilot patch: mulligan decisions asked so far this game, per seat (= mulligans taken)
+    // Pilot patch: a human seat gets game start/end and match end pushed to its browser.
+    const hi = spec.seats.findIndex((s) => s.provider === "human");
     const logDir = path.join(spec.runDir, "forge-logs");
     fs.mkdirSync(logDir, { recursive: true });
     const logPath = path.join(logDir, `${spec.matchId}.log`);
@@ -91,6 +95,7 @@ export class ForgeEngine implements GameEngine {
         try { fs.closeSync(logFile); } catch { /* ignore */ }
         const engineErrors = scanEngineErrors(logPath, gameEnds);
         const w0 = games.filter((g) => g.winner === 0).length, w1 = games.filter((g) => g.winner === 1).length;
+        if (hi >= 0) humanHooks.matchEnd?.({ summary: error ? `abandonado (${error})` : `${spec.seats[hi].id} ${hi === 0 ? w0 : w1} – ${hi === 0 ? w1 : w0} ${spec.seats[1 - hi].id}`, error });
         // An abandoned match has no winner, whatever the score when it stopped (its games stay in `games` for the record).
         resolve({ matchId: spec.matchId, pod: spec.pod, round: spec.round, seats: [spec.seats[0].id, spec.seats[1].id], games,
           winner: error ? null : w0 > w1 ? 0 : w1 > w0 ? 1 : null, delegations, forfeits, auto, engineErrors,
@@ -115,7 +120,9 @@ export class ForgeEngine implements GameEngine {
           switch (msg.type) {
             case "game_start":
               current = { game: msg.game, onThePlay: msg.onThePlay, t0: Date.now() };
+              if (hi >= 0) humanHooks.gameStart?.({ game: msg.game, onThePlay: msg.onThePlay, youPlay: msg.onThePlay === hi });
               decisions[0] = decisions[1] = 0;
+              mulligans[0] = mulligans[1] = 0;
               break;
             case "decision": {
               const seatIdx = msg.seat as 0 | 1;
@@ -123,7 +130,10 @@ export class ForgeEngine implements GameEngine {
               const req: DecisionRequest = {
                 requestId: `${spec.matchId}-g${msg.game ?? current?.game ?? 0}-${msg.rid}`,
                 phase: "game", kind: msg.kind as DecisionKind, prompt: msg.prompt, state: msg.state,
-                options: msg.options, min: msg.min, max: msg.max, hints: msg.hints, attempt: msg.attempt,
+                options: msg.options, min: msg.min, max: msg.max, attempt: msg.attempt,
+                // Pilot patch: the seat's deck composition and mulligan count, for the mulligan section (play/draw comes from Forge's own prompt text;
+                // game_start does not carry it).
+                hints: { ...(msg.hints ?? {}), deckSize: spec.deckInfo?.[seatIdx].size, deckLands: spec.deckInfo?.[seatIdx].lands, mulligansSoFar: msg.kind === "mulligan" ? mulligans[seatIdx]++ : mulligans[seatIdx] },
               };
               try {
                 const res = await spec.seats[seatIdx].decide(req, { pod: spec.pod, matchId: spec.matchId, game: msg.game ?? current?.game });
@@ -149,6 +159,7 @@ export class ForgeEngine implements GameEngine {
                 game: msg.game, winner: msg.winner ?? null, onThePlay: msg.onThePlay ?? current?.onThePlay ?? 0, turns: msg.turns ?? 0,
                 reason: msg.reason ?? "unknown", decisions: [...decisions] as [number, number], durationMs: current ? Date.now() - current.t0 : 0,
               });
+              if (hi >= 0) humanHooks.gameEnd?.({ game: msg.game, youWon: msg.winner == null ? null : msg.winner === hi, reason: msg.reason, turns: msg.turns });
               break;
             case "between_games": {
               // Each LLM seat rewrites its match notes from the public log; the next game waits for both.
@@ -196,6 +207,8 @@ export class ForgeEngine implements GameEngine {
           "--external0", String(!spec.seats[0].usesForgeAi), "--external1", String(!spec.seats[1].usesForgeAi),
           "--games", String(spec.gamesPerMatch), "--seed", String(spec.seed), "--max-turns", String(spec.maxGameTurns),
           "--stops", spec.priorityStops, "--mana", spec.manaPayment, "--max-retries", String(spec.maxRetries),
+          // pilot patch: balanced bars — odd rounds seat 0 plays first, even rounds seat 1 (the bridge forces it for AI and agent seats alike)
+          ...(spec.playDrawAlternate ? ["--first", String(spec.round % 2 === 1 ? 0 : 1)] : []),
           "--human", String(this.cfg.controller !== "ai"),
         ];
         fs.writeSync(logFile, `$ ${this.cfg.java ?? "java"} ${args.join(" ")}\n(cwd ${cwd})\n`);

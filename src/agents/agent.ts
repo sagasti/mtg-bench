@@ -17,6 +17,8 @@ export interface AgentResult {
   infraError?: boolean;
   /** The decision's time budget ran out (model time only; provider backoff excluded): the agent's failure. */
   timedOut?: boolean;
+  /** Pilot patch: the first budget ran out and the answer came from the fast re-ask (seat.fallbackReasoningEffort). */
+  timeoutFallback?: boolean;
   usage: TokenUsage;
   modelCalls: number;
   toolCalls: Record<string, number>;
@@ -182,6 +184,7 @@ export class Seat {
       valid: !fallback && !forfeit, invalidAttempts: result.invalidAttempts, fallback, forfeit, autoResolved: false, modelCalls: result.modelCalls,
       toolCalls: result.toolCalls, latencyMs: Date.now() - t0, rationale: response.rationale, ...outcome(result, fallback || forfeit),
       ...(result.deckReview ? { deckReview: result.deckReview } : {}),
+      ...(result.timeoutFallback ? { timeoutFallback: true } : {}),
     });
     return response;
   }

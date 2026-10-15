@@ -3,6 +3,8 @@ package forge.bridge;
 /** Per-match settings shared by both external controllers. */
 public final class MatchContext {
     public volatile int game = 0;
+    /** Pilot patch (mtg-rival): seat forced to play first in every game of this match (-1 = Forge's die roll + the winner's choice). */
+    public volatile int firstSeat = -1;
     /** Games won so far in this match, by seat (free information: the match score). */
     public final int[] wins = new int[2];
     /**

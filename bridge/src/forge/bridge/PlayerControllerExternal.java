@@ -315,6 +315,7 @@ public class PlayerControllerExternal extends PlayerControllerAi {
 
     @Override
     public Player chooseStartingPlayer(boolean isFirstGame) {
+        if (ctx.firstSeat >= 0) { ctx.auto(seat, "policy", "play_draw", "starting player forced by the harness (--first)"); return ctx.firstSeat == seat ? player : player.getOpponents().get(0); }
         if (ai()) return super.chooseStartingPlayer(isFirstGame);
         Boolean play = askYesNo("play_draw", (isFirstGame ? "You won the die roll." : "You lost the previous game.") + " Do you want to play first or draw first?",
                 "Play first", "Draw first");

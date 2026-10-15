@@ -76,11 +76,11 @@ export class LlmAgent implements DecisionAgent {
    * cut off by the output cap is recorded as truncated and asked again once with a bigger cap; every answer is checked
    * against the seat's spec. Throws when the provider keeps failing or the clock runs out.
    */
-  async call(args: Pick<CompleteArgs, "system" | "messages" | "tools" | "debug">, clock: DecisionClock, round: number, onCall: CallObserver): Promise<CallOutcome> {
+  async call(args: Pick<CompleteArgs, "system" | "messages" | "tools" | "debug" | "reasoningEffort" | "maxTokens">, clock: DecisionClock, round: number, onCall: CallObserver): Promise<CallOutcome> {
     let usage: TokenUsage = { ...ZERO_USAGE };
     let calls = 0, truncated = 0;
     let specViolation: string | undefined;
-    let maxTokens: number | undefined;
+    let maxTokens: number | undefined = args.maxTokens;
     for (;;) {
       const t0 = Date.now();
       let turn: ModelTurn;
@@ -139,7 +139,9 @@ export class LlmAgent implements DecisionAgent {
       proposals.push({ response: resp, key: deckKey(resp.choice, resp.basics), cards: stats.cards, lands: stats.lands });
       return stats;
     };
+    let fellBack = false;
     const result = (response: DecisionResponse | null, extra: Partial<AgentResult> = {}): AgentResult => {
+      if (fellBack) extra = { timeoutFallback: true, ...extra };
       // A failure after a valid proposal (invalid answers, the clock, the provider): that proposal is the agent's deck;
       // the failure is kept on the review record.
       if (!response && proposals.length) {
@@ -181,8 +183,19 @@ export class LlmAgent implements DecisionAgent {
     try {
       for (let round = 0; round < maxRounds; round++) {
         let out;
-        try { out = await this.call({ system, messages, tools, debug }, clock, round, onCall); }
-        catch (e: any) { return result(null, failure(e, clock)); }
+        const fast = fellBack ? { reasoningEffort: this.seat.fallbackReasoningEffort, maxTokens: 4096 } : {};
+        try { out = await this.call({ system, messages, tools, debug, ...fast }, clock, round, onCall); }
+        catch (e: any) {
+          // Pilot patch: one fast re-ask (reasoning off) under a fresh short budget instead of the null action.
+          if (clock.expired && this.seat.fallbackReasoningEffort && !fellBack && req.kind !== "deckbuild") {
+            fellBack = true;
+            clock.stop();
+            clock = new DecisionClock((this.seat.fallbackTimeoutSec ?? 60) * 1000);
+            messages.push({ role: "user", content: "Your time budget for this decision ran out. Answer NOW: call submit_decision with your best option ids. No further analysis." });
+            continue;
+          }
+          return result(null, failure(e, clock));
+        }
         modelCalls += out.calls; usage = addUsage(usage, out.usage); truncated += out.truncated; specViolation ??= out.specViolation;
         const turn = out.turn;
         messages.push({ role: "assistant", text: turn.text, toolCalls: turn.toolCalls, raw: turn.raw });

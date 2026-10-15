@@ -57,6 +57,7 @@ public final class AgentBridge {
             int games = Integer.parseInt(a.getOrDefault("games", "3"));
             MatchContext ctx = new MatchContext(Integer.parseInt(a.getOrDefault("max-turns", "40")), !"all".equals(a.get("stops")), "always".equals(a.get("mana")),
                     Integer.parseInt(a.getOrDefault("max-retries", "3")));
+            ctx.firstSeat = Integer.parseInt(a.getOrDefault("first", "-1")); // pilot patch: --first 0|1 forces the starting player
 
             GameRules rules = new GameRules(GameType.Draft);
             rules.setAppliedVariants(EnumSet.of(GameType.Draft));
@@ -70,7 +71,7 @@ public final class AgentBridge {
                 String name = "P" + (s + 1); // neutral names: agents never learn who they are playing
                 boolean external = Boolean.parseBoolean(a.getOrDefault("external" + s, "true"));
                 boolean human = Boolean.parseBoolean(a.getOrDefault("human", "false")); // spike: Forge's human controller + headless screen
-                lobby[s] = !external ? GamePlayerUtil.createAiPlayer(name, s)
+                lobby[s] = !external ? (ctx.firstSeat >= 0 ? LobbyPlayerAiForced.create(name, s, ctx) : GamePlayerUtil.createAiPlayer(name, s))
                         : human ? new LobbyPlayerAgentHuman(name, client, ctx, s) : new LobbyPlayerExternal(name, client, ctx, s);
                 RegisteredPlayer rp = new RegisteredPlayer(deck);
                 rp.setPlayer(lobby[s]);

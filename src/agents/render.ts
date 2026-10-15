@@ -6,6 +6,9 @@ import YAML from "yaml";
 import { type CardDb, cardText, getCard, isBasicLand } from "../cards/db.ts";
 import type { EventConfig } from "../config.ts";
 import type { DecisionRequest, Phase } from "../types.ts";
+import { damageMath } from "../knowledge/damage.ts";
+import { mulliganMath } from "../knowledge/mulligan.ts";
+import { gamePlan } from "../knowledge/plans.ts";
 
 const CARD_KEYS = new Set(["name", "card", "cards", "picks", "pool", "pack", "seen", "hand", "deck", "graveyard", "exile", "source"]);
 
@@ -35,7 +38,22 @@ export function renderRequest(req: DecisionRequest, event: EventConfig, db: Card
   parts.push(`# Decision: ${req.kind}\n${req.prompt}`);
   if (matchNotes) parts.push(`## Your match notes (written after earlier games of this match)\n${matchNotes}`);
   if (notes && event.carryNotes) parts.push(`## Your notes\n${notes}`);
+  if (event.plansFile && req.phase === "game") {
+    // Pilot patch: matchup plan for the seat's deck, the opponent's archetype inferred from what is visible.
+    const plan = gamePlan(req, event.plansFile, db);
+    if (plan) parts.push(plan);
+  }
   parts.push(`## State\n${YAML.stringify(req.state, { lineWidth: 0 }).trim()}`);
+  if (event.damageMath) {
+    // Pilot patch: deterministic damage / lethal arithmetic, the same for every seat.
+    const math = damageMath(req, db);
+    if (math) parts.push(math);
+  }
+  if (event.mulliganMath) {
+    // Pilot patch: keep/mulligan arithmetic (lands, sources, land-drop odds) and a heuristic verdict.
+    const mull = mulliganMath(req, db);
+    if (mull) parts.push(mull);
+  }
   const optLines = req.options.map((o) => `- [${o.id}] ${o.label}`);
   parts.push(`## Options\n${optLines.join("\n")}`);
   const how = req.min === req.max

@@ -11,6 +11,7 @@ export type ProviderName =
   | "anthropic"          // Anthropic Messages API
   | "openai"             // OpenAI Chat Completions (also any OpenAI-compatible server via baseUrl)
   | "openrouter"         // OpenAI-compatible, baseUrl defaults to https://openrouter.ai/api/v1
+  | "human"              // pilot patch: a person playing in the browser (src/human/server.ts)
   | "gemini"             // Google's OpenAI-compatible endpoint
   | "random"             // uniform random legal choice (floor anchor)
   | "rank-bot"           // drafts by CubeCobra rank, builds 2-colour 23/17, plays greedily
@@ -32,6 +33,18 @@ export interface SeatConfig {
   thinkingBudget?: number;
   /** OpenAI-style reasoning effort ("low" | "medium" | "high"). */
   reasoningEffort?: string;
+  /**
+   * Pilot patch: when a decision's time budget runs out, instead of forfeiting the agent is asked once more with this
+   * reasoning effort (e.g. "none") under a fresh budget of fallbackTimeoutSec (default 60). The decision is recorded
+   * with `timeoutFallback: true`.
+   */
+  fallbackReasoningEffort?: string;
+  fallbackTimeoutSec?: number;
+  /** Pilot patch, provider "human": port of the web table (default 8787) and the link token (random per run when unset). */
+  webPort?: number;
+  webToken?: string;
+  /** Pilot patch, provider "human": seconds an external bot/person gets per decision; unanswered = forfeit (null action). Unset = wait forever. */
+  decisionTimeoutSec?: number;
   /** Extra JSON merged into every request body (provider-specific knobs). */
   extraBody?: Record<string, unknown>;
   headers?: Record<string, string>;
@@ -99,6 +112,18 @@ export interface EventConfig {
    * the agent's clock. Optional, with no entry in the defaults, so configs that don't set it keep their config hash.
    */
   providerRetryWindowSec?: number;
+  /**
+   * Pilot patch (mtg-rival): render a "Damage math" section (face damage available this turn, lethal check, incoming
+   * combat) computed by the harness into every in-game prompt. Optional, no entry in the defaults, so configs that
+   * don't set it keep their config hash.
+   */
+  damageMath?: boolean;
+  /** Pilot patch: render a "Keep or mulligan" section (lands, mana sources, land-drop odds, heuristic verdict) into mulligan / london_bottom prompts. */
+  mulliganMath?: boolean;
+  /** Pilot patch: YAML with archetype signatures and matchup plans; a "Game plan" section is rendered when the seat's deck is recognised. */
+  plansFile?: string;
+  /** Pilot patch: decide play/draw by policy so that odd matches put seat 0 on the play and even matches seat 1 (balanced bars). */
+  playDrawAlternate?: boolean;
 }
 
 export interface EngineConfig {
@@ -174,7 +199,7 @@ export function validateConfig(cfg: BenchConfig) {
     else if (ids.has(s.id)) errs.push(`${where}: duplicate id`);
     ids.add(s.id);
     const llm = ["anthropic", "openai", "openrouter", "gemini"].includes(s.provider);
-    if (!["anthropic", "openai", "openrouter", "gemini", "random", "rank-bot", "forge-ai", "echo"].includes(s.provider))
+    if (!["anthropic", "openai", "openrouter", "gemini", "random", "rank-bot", "forge-ai", "echo", "human"].includes(s.provider))
       errs.push(`${where}: unknown provider "${s.provider}"`);
     if (llm && !s.model) errs.push(`${where}: model is required for provider ${s.provider}`);
     if (llm && !s.apiKeyEnv && !s.baseUrl) errs.push(`${where}: apiKeyEnv is required for provider ${s.provider}`);
@@ -195,6 +220,10 @@ export function validateConfig(cfg: BenchConfig) {
   if (cfg.event.format === "swiss" && !(Number.isInteger(cfg.event.rounds) && cfg.event.rounds >= 1 && cfg.event.rounds <= podSize - 1)) errs.push(`event.rounds must be 1–${podSize - 1} for Swiss (${podSize} seats)`);
   if (cfg.engine.type === "forge" && !cfg.engine.forgeDir) errs.push("engine.forgeDir is required when engine.type is forge");
   if (cfg.event.schedule !== undefined && !["pool", "rounds"].includes(cfg.event.schedule)) errs.push("event.schedule must be pool or rounds");
+  if (cfg.event.damageMath !== undefined && typeof cfg.event.damageMath !== "boolean") errs.push("event.damageMath must be true or false");
+  if (cfg.event.mulliganMath !== undefined && typeof cfg.event.mulliganMath !== "boolean") errs.push("event.mulliganMath must be true or false");
+  if (cfg.event.playDrawAlternate !== undefined && typeof cfg.event.playDrawAlternate !== "boolean") errs.push("event.playDrawAlternate must be true or false");
+  if (cfg.event.plansFile !== undefined && (typeof cfg.event.plansFile !== "string" || !fs.existsSync(cfg.event.plansFile))) errs.push("event.plansFile must point to an existing YAML file");
   const w = cfg.event.providerRetryWindowSec;
   if (w !== undefined && !(typeof w === "number" && w >= 0)) errs.push("event.providerRetryWindowSec must be a number of seconds >= 0");
   if (errs.length) throw new Error("Invalid config:\n  - " + errs.join("\n  - "));

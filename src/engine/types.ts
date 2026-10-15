@@ -24,6 +24,10 @@ export interface MatchSpec {
   manaPayment: "smart" | "always";
   /** Re-asks after a failed answer before the decision is forfeited (event.maxRetries). */
   maxRetries: number;
+  /** Pilot patch: odd rounds put seat 0 on the play, even rounds seat 1 (play_draw answered by policy, not by the agents). */
+  playDrawAlternate?: boolean;
+  /** Pilot patch: per seat, deck size and land count (for the mulligan section). */
+  deckInfo?: [{ size: number; lands: number }, { size: number; lands: number }];
 }
 
 /** A decision Forge's AI made on an agent's behalf (answer missing/illegal, or a rare decision type). */

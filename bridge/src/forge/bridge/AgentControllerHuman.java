@@ -190,6 +190,7 @@ public class AgentControllerHuman extends PlayerControllerHuman {
 
     @Override
     public Player chooseStartingPlayer(boolean isFirstGame) {
+        if (ch.ctx.firstSeat >= 0) { ch.ctx.auto(ch.seat, "policy", "play_draw", "starting player forced by the harness (--first)"); return ch.ctx.firstSeat == ch.seat ? getPlayer() : getPlayer().getOpponents().get(0); }
         return as("play_draw", () -> super.chooseStartingPlayer(isFirstGame));
     }
 

@@ -31,6 +31,7 @@ import { compareToBaseline, CONFORMANCE_DIR, runConformance } from "./tournament
 import { runHeadToHead } from "./tournament/match.ts";
 import { runEvent } from "./tournament/run.ts";
 import { info, loadDotEnv, setVerbose } from "./util/log.ts";
+import { humanServer } from "./agents/human.ts";
 
 loadDotEnv();
 
@@ -177,6 +178,7 @@ async function main() {
       for (const r of results) for (const g of r.games) w[g.winner === 0 ? 0 : g.winner === 1 ? 1 : 2]++;
       console.log(`\nGames: ${seatIds[0]} ${w[0]} – ${w[1]} ${seatIds[1]}${w[2] ? ` (${w[2]} drawn)` : ""}`);
       console.log(`Report: ${path.join(runDir, "report.md")}`);
+      await humanServer()?.stop(); // pilot patch: the web table would keep the process alive
       return;
     }
     case "conformance": {

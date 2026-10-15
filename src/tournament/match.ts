@@ -7,7 +7,7 @@ import { promptFile } from "../agents/render.ts";
 import type { Seat } from "../agents/agent.ts";
 import { Recorder } from "../analytics/recorder.ts";
 import { writeReport } from "../analytics/report.ts";
-import { loadDb } from "../cards/db.ts";
+import { type CardDb, getCard, isBasicLand, loadDb } from "../cards/db.ts";
 import { loadCube, loadRankings, parseCardList } from "../cards/cube.ts";
 import { type BenchConfig, configHash } from "../config.ts";
 import { type Deck, deckProblems, saveDeck } from "../deckbuild/deckbuild.ts";
@@ -19,6 +19,12 @@ import { Rng } from "../util/rng.ts";
 import { freshRunDir, pool } from "./run.ts";
 
 /** A saved deck: the harness's .json (from runs/<id>/pod0/decks) or any Forge .dck / plain card list. */
+/** Pilot patch: deck size and land count per seat, for the mulligan section. */
+function deckInfo(decks: [Deck, Deck], db: CardDb): [{ size: number; lands: number }, { size: number; lands: number }] {
+  const one = (d: Deck) => ({ size: d.main.length, lands: d.main.filter((n) => isBasicLand(n) || /\bLand\b/.test(getCard(db, n)?.types ?? "")).length });
+  return [one(decks[0]), one(decks[1])];
+}
+
 export function loadDeckFile(file: string, seatId: string): Deck {
   const text = fs.readFileSync(file, "utf8");
   if (file.endsWith(".json")) return { ...(JSON.parse(text) as Deck), seatId };
@@ -81,6 +87,7 @@ export async function runHeadToHead(cfg: BenchConfig, engine: GameEngine, opts: 
         matchId, pod: 0, round: m + 1, seats, decks, deckFiles: dckFiles, gamesPerMatch: ev.gamesPerMatch,
         seed: seeds[m], maxGameTurns: ev.maxGameTurns, runDir,
         priorityStops: ev.priorityStops, manaPayment: ev.manaPayment, maxRetries: ev.maxRetries,
+        playDrawAlternate: ev.playDrawAlternate, deckInfo: deckInfo(decks, db),
       });
     } catch (e: any) {
       res = { matchId, pod: 0, round: m + 1, seats: [seats[0].id, seats[1].id], games: [], winner: null, error: String(e?.message ?? e), errorKind: "harness" };

@@ -7,6 +7,7 @@ import path from "node:path";
 import { Jsonl } from "../util/log.ts";
 import { Seat } from "./agent.ts";
 import { BotAgent, RandomBot, RankBot } from "./bots.ts";
+import { WebHumanAgent } from "./human.ts";
 import { LlmAgent } from "./llm.ts";
 import { AnthropicProvider } from "./providers/anthropic.ts";
 import { EchoProvider } from "./providers/echo.ts";
@@ -37,6 +38,7 @@ export function makeSeat(sc: SeatConfig, d: SeatDeps): Seat {
     case "openai": case "openrouter": case "gemini":
       agent = new LlmAgent(sc, limit(new OpenAIProvider(sc, retry)), d.cfg.event, d.cubeName, d.db, d.kb, log); break;
     case "echo": agent = new LlmAgent(sc, limit(new EchoProvider(sc)), d.cfg.event, d.cubeName, d.db, d.kb, log); break;
+    case "human": agent = new WebHumanAgent(sc, d.db, d.recorder.runDir); break;
     default: throw new Error(`unknown provider ${(sc as any).provider}`);
   }
   return new Seat(sc, agent, fallback, d.recorder, d.cfg.event, d.cfg.pricing);
