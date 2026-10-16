@@ -12,6 +12,16 @@ import type { DecisionRequest } from "../types.ts";
 
 interface HandCard { id?: string; name: string; pt?: string; text?: string }
 
+/** The verdict behind the section. `binding` marks the clear-cut cases (no land, a one-lander without a second
+ *  source, five or more lands on seven) that event.mulliganPolicy "strict" answers without asking the model. */
+export interface MulliganVerdict { verdict: string; why: string; action: "keep" | "mulligan"; binding: boolean }
+const verdicts = new Map<string, MulliganVerdict>();
+export function mulliganVerdict(req: DecisionRequest, db: CardDb): MulliganVerdict | undefined {
+  if (req.kind !== "mulligan") return undefined;
+  mulliganMath(req, db);
+  return verdicts.get(req.requestId);
+}
+
 export function mulliganMath(req: DecisionRequest, db: CardDb): string | undefined {
   if (req.kind !== "mulligan" && req.kind !== "london_bottom") return undefined;
   const st = req.state as any;
@@ -73,26 +83,27 @@ export function mulliganMath(req: DecisionRequest, db: CardDb): string | undefin
     lines.push(`- Land-drop odds (${landsLeft} lands left in ${library} cards): 2nd land by turn 2: ${pct(pAtLeast(need2, drawsBy(2)))}, 3rd land by turn 3: ${pct(pAtLeast(need3, drawsBy(3)))}, 4th land by turn 4: ${pct(pAtLeast(need4, drawsBy(4)))}.`);
   }
   const sources = lands.length + fetchers.length + landcyclers.length;
-  let verdict: string, why: string;
+  let verdict: string, why: string, binding = false;
   if (keepSize <= 5) {
-    if (lands.length === 0 && sources === 0) { verdict = "MULLIGAN"; why = "no land at all; even at 5 a hand that cannot cast anything loses"; }
+    if (lands.length === 0 && sources === 0) { verdict = "MULLIGAN"; binding = true; why = "no land at all; even at 5 a hand that cannot cast anything loses"; }
     else if (lands.length >= 5) { verdict = "MULLIGAN"; why = "five or more lands: not enough spells to win"; }
     else { verdict = "KEEP"; why = `at ${keepSize} cards you keep anything with at least one land and a plan; going lower rarely helps`; }
   } else if (lands.length === 0) {
-    verdict = "MULLIGAN"; why = sources ? "no land in hand; a land fetcher does not replace a land you can play on turn 1" : "no land: you cannot cast anything";
+    verdict = "MULLIGAN"; binding = true; why = sources ? "no land in hand; a land fetcher does not replace a land you can play on turn 1" : "no land: you cannot cast anything";
   } else if (lands.length === 1) {
     // A second source (fetcher / landcycler) or a dork with one-drops is a plan; two cantrips only on the draw and with nothing expensive.
     const extraPlan = sources >= 2 || (dorks.length >= 1 && oneDrops.length >= 2) || (cantrips.length >= 2 && oneDrops.length >= 2 && expensive.length === 0 && onPlay === false);
     if (extraPlan && minCmc <= 1) { verdict = "KEEP (borderline)"; why = `one land but ${sources >= 2 ? "a second mana source" : dorks.length ? "a mana creature and cheap plays" : "two cantrips on the draw"} to dig; a 7-card one-lander is usually a mulligan, this one has a plan`; }
-    else { verdict = "MULLIGAN"; why = `one land with ${deckLands} lands in the deck: a ${pct(pAtLeast(1, drawsBy(2)))} chance of the 2nd land on time and ${expensive.length ? `${expensive.length} expensive spell${expensive.length > 1 ? "s" : ""}` : "too few cheap plays"}; a 6-card hand with two lands beats this`; }
+    else { verdict = "MULLIGAN"; binding = keepSize === 7; why = `one land with ${deckLands} lands in the deck: a ${pct(pAtLeast(1, drawsBy(2)))} chance of the 2nd land on time and ${expensive.length ? `${expensive.length} expensive spell${expensive.length > 1 ? "s" : ""}` : "too few cheap plays"}; a 6-card hand with two lands beats this`; }
   } else if (lands.length >= 5) {
-    verdict = keepSize === 7 ? "MULLIGAN" : "KEEP (borderline)"; why = `${lands.length} lands and ${spells.length} spells: flood; ${keepSize === 7 ? "six cards with real plays beat this" : "at six, keep and bottom a land"}`;
+    verdict = keepSize === 7 ? "MULLIGAN" : "KEEP (borderline)"; binding = keepSize === 7; why = `${lands.length} lands and ${spells.length} spells: flood; ${keepSize === 7 ? "six cards with real plays beat this" : "at six, keep and bottom a land"}`;
   } else if (lands.length === 2 && minCmc >= 3) {
     verdict = "KEEP (borderline)"; why = `two lands but nothing to cast before turn 3; fine on the draw${onPlay === false ? "" : ", risky on the play"}; a one-mana play would make it a clear keep`;
   } else {
     verdict = "KEEP"; why = `${lands.length} lands and ${cheap.length} cheap play${cheap.length === 1 ? "" : "s"}: a normal hand`;
   }
-  lines.push(`- Heuristic verdict: **${verdict}** — ${why}.`);
+  lines.push(`- Heuristic verdict: **${verdict}** — ${why}.${binding ? " Clear case: with mulliganPolicy strict the harness answers it." : ""}`);
+  verdicts.set(req.requestId, { verdict, why, action: verdict.startsWith("MULLIGAN") ? "mulligan" : "keep", binding });
   lines.push(`Rule of thumb in Pauper: on 7 keep 2-4 lands with something to cast by turn 2; on 6 keep 2-4 lands; on 5 keep almost anything with a land. One-land hands need a second source or two one-mana cantrips, and are kept more readily on the draw.`);
   return lines.join("\n");
 }

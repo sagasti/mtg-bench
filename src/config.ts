@@ -120,6 +120,8 @@ export interface EventConfig {
   damageMath?: boolean;
   /** Pilot patch: render a "Keep or mulligan" section (lands, mana sources, land-drop odds, heuristic verdict) into mulligan / london_bottom prompts. */
   mulliganMath?: boolean;
+  /** Pilot patch: "strict" = the clear-cut mulligan verdicts (no land, one-lander without a plan, 5+ lands on 7) are answered by the harness, not the model. Default "advise". */
+  mulliganPolicy?: "advise" | "strict";
   /** Pilot patch: YAML with archetype signatures and matchup plans; a "Game plan" section is rendered when the seat's deck is recognised. */
   plansFile?: string;
   /** Pilot patch: decide play/draw by policy so that odd matches put seat 0 on the play and even matches seat 1 (balanced bars). */
@@ -236,6 +238,8 @@ export function validateConfig(cfg: BenchConfig) {
   if (cfg.event.schedule !== undefined && !["pool", "rounds"].includes(cfg.event.schedule)) errs.push("event.schedule must be pool or rounds");
   if (cfg.event.damageMath !== undefined && typeof cfg.event.damageMath !== "boolean") errs.push("event.damageMath must be true or false");
   if (cfg.event.mulliganMath !== undefined && typeof cfg.event.mulliganMath !== "boolean") errs.push("event.mulliganMath must be true or false");
+  if (cfg.event.mulliganPolicy !== undefined && !["advise", "strict"].includes(cfg.event.mulliganPolicy)) errs.push("event.mulliganPolicy must be advise or strict");
+  if (cfg.event.mulliganPolicy === "strict" && !cfg.event.mulliganMath) errs.push("event.mulliganPolicy strict needs event.mulliganMath: true");
   if (cfg.event.playDrawAlternate !== undefined && typeof cfg.event.playDrawAlternate !== "boolean") errs.push("event.playDrawAlternate must be true or false");
   if (cfg.event.plansFile !== undefined && (typeof cfg.event.plansFile !== "string" || !fs.existsSync(cfg.event.plansFile))) errs.push("event.plansFile must point to an existing YAML file");
   const w = cfg.event.providerRetryWindowSec;

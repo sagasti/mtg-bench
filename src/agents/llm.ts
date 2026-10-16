@@ -9,6 +9,7 @@ import type { AgentResult, CallObserver, DecisionAgent } from "./agent.ts";
 import { type ChatMessage, type CompleteArgs, DecisionClock, type FailureDetail, type ModelTurn, type Provider, ProviderError } from "./providers/types.ts";
 import { info, type Jsonl } from "../util/log.ts";
 import { hasPrompt, renderRequest, renderTemplate, systemPrompt } from "./render.ts";
+import { mulliganVerdict } from "../knowledge/mulligan.ts";
 import { deckKey, deckStats, renderDeckStats } from "../deckbuild/stats.ts";
 
 export class LlmAgent implements DecisionAgent {
@@ -110,6 +111,16 @@ export class LlmAgent implements DecisionAgent {
   }
 
   async decide(req: DecisionRequest, ctx: DecideContext, onCall: CallObserver): Promise<AgentResult> {
+    // Pilot patch: clear-cut mulligans are a policy, not a model call (the model kept one-landers against the verdict).
+    if (req.kind === "mulligan" && this.event.mulliganPolicy === "strict" && this.event.mulliganMath) {
+      const v = mulliganVerdict(req, this.db);
+      const want = v?.action === "mulligan" ? /^Button: Mulligan$/i : /^Button: Keep$/i;
+      const opt = v?.binding ? req.options.find((o) => want.test(o.label)) : undefined;
+      if (v && opt) {
+        info(`[${this.seat.id}] mulligan policy: ${v.action} (${v.why})`);
+        return { response: { choice: [opt.id], rationale: `mulligan policy (${v.verdict}): ${v.why}` }, usage: ZERO_USAGE, modelCalls: 0, toolCalls: { mulligan_policy: 1 }, invalidAttempts: 0 };
+      }
+    }
     const system = systemPrompt(this.event, req.phase, ctx.brief);
     const tools = toolsForTier(this.event.knowledge);
     const first = renderRequest(req, this.event, this.db, ctx.notes, ctx.matchNotes);
