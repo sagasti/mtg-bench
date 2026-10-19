@@ -9,6 +9,8 @@ import type { DecisionRequest, Phase } from "../types.ts";
 import { damageMath } from "../knowledge/damage.ts";
 import { mulliganMath } from "../knowledge/mulligan.ts";
 import { gamePlan } from "../knowledge/plans.ts";
+import { combatMath } from "../knowledge/combat.ts";
+import { openMana } from "../knowledge/interaction.ts";
 
 const CARD_KEYS = new Set(["name", "card", "cards", "picks", "pool", "pack", "seen", "hand", "deck", "graveyard", "exile", "source"]);
 
@@ -53,6 +55,16 @@ export function renderRequest(req: DecisionRequest, event: EventConfig, db: Card
     // Pilot patch: keep/mulligan arithmetic (lands, sources, land-drop odds) and a heuristic verdict.
     const mull = mulliganMath(req, db);
     if (mull) parts.push(mull);
+  }
+  if (event.combatMath) {
+    // Pilot patch: every legal single block and its outcome, plus the race, from the visible board.
+    const c = combatMath(req, db);
+    if (c) parts.push(c);
+  }
+  if (event.openMana) {
+    // Pilot patch: the opponent's open mana, the instant-speed answers left in their known list, our mana after each cast.
+    const o = openMana(req, db, event.plansFile);
+    if (o) parts.push(o);
   }
   const optLines = req.options.map((o) => `- [${o.id}] ${o.label}`);
   parts.push(`## Options\n${optLines.join("\n")}`);

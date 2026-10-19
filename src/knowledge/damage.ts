@@ -22,10 +22,10 @@ const SKIP_KINDS = new Set([
   "search", "mana_payment", "deckbuild", "draft_pick", "cube_study", "match_notes",
 ]);
 
-interface Perm { id?: string; name: string; text?: string; pt?: string; tapped?: boolean; summoningSick?: boolean; token?: boolean; attacking?: string }
-interface HandCard { id?: string; name: string }
-interface Side { life?: number; hand?: HandCard[]; handSize?: number; battlefield?: Perm[]; graveyard?: string[]; exile?: string[]; landsPlayedThisTurn?: number }
-interface GameState {
+export interface Perm { id?: string; name: string; text?: string; pt?: string; tapped?: boolean; summoningSick?: boolean; token?: boolean; attacking?: string }
+export interface HandCard { id?: string; name: string }
+export interface Side { life?: number; hand?: HandCard[]; handSize?: number; battlefield?: Perm[]; graveyard?: string[]; exile?: string[]; landsPlayedThisTurn?: number }
+export interface GameState {
   phase?: string; activePlayer?: string; youAre?: string; you?: Side; opponent?: Side;
   stack?: { controller?: string; source?: string; description?: string }[]; combat?: Perm[]; recentLog?: string[];
 }
@@ -44,8 +44,8 @@ const BLOOD_RE = /\{1\}, \{T\}, Discard a card, Sacrifice (?:this token|this art
 const NUMBER_WORDS: Record<string, number> = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4 };
 const num = (w: string) => NUMBER_WORDS[w.toLowerCase()] ?? Number(w);
 
-interface Mana { total: number; byColor: Record<string, number> }
-interface Pips { mana: number; pips: Record<string, number>; x?: boolean }
+export interface Mana { total: number; byColor: Record<string, number> }
+export interface Pips { mana: number; pips: Record<string, number>; x?: boolean }
 interface Triggers { perNoncreature: number; perInstSorc: number; perSpell: number }
 interface Outlet { slots: number; mandatory: number }
 
@@ -374,7 +374,7 @@ function sentenceAround(text: string, index: number): string {
 }
 
 /** Forge mana syntax: "1 R R", "R", "X R", "W/U", "" (no cost). Colourless {C} and hybrid are counted as generic. */
-function parseForgeCost(cost: string): Pips | null {
+export function parseForgeCost(cost: string): Pips | null {
   const out: Pips = { mana: 0, pips: {} };
   const c = (cost ?? "").trim();
   if (!c || c === "no cost") return out;
@@ -536,7 +536,7 @@ function mergeByCard(entries: string[]): string[] {
 
 // ---------------------------------------------------------------------------------------------------------------------
 
-function isLand(p: { name: string; text?: string; pt?: string }, db: CardDb): boolean {
+export function isLand(p: { name: string; text?: string; pt?: string }, db: CardDb): boolean {
   if (p.pt) return false;
   if (isBasicLand(p.name)) return true;
   const c = getCard(db, p.name);
@@ -545,7 +545,7 @@ function isLand(p: { name: string; text?: string; pt?: string }, db: CardDb): bo
 }
 
 /** Elves on both battlefields (Priest of Titania counts every Elf, changelings included). */
-function countElves(st: GameState, db: CardDb): number {
+export function countElves(st: GameState, db: CardDb): number {
   let n = 0;
   for (const side of [st.you, st.opponent]) for (const p of side?.battlefield ?? []) {
     if (!p.pt) continue;
@@ -557,7 +557,7 @@ function countElves(st: GameState, db: CardDb): number {
 
 const BASIC_COLORS: Record<string, string> = { Plains: "W", Island: "U", Swamp: "B", Mountain: "R", Forest: "G", Wastes: "C" };
 
-function landColors(p: { name: string; text?: string }, db: CardDb): string[] {
+export function landColors(p: { name: string; text?: string }, db: CardDb): string[] {
   if (BASIC_COLORS[p.name]) return [BASIC_COLORS[p.name]];
   const text = p.text ?? getCard(db, p.name)?.oracle ?? "";
   if (/Add one mana of any color/i.test(text)) return ["W", "U", "B", "R", "G"];
@@ -569,7 +569,7 @@ function landColors(p: { name: string; text?: string }, db: CardDb): string[] {
   return colors.size ? [...colors] : ["C"];
 }
 
-function typeLine(p: { name: string; text?: string; token?: boolean }, db: CardDb): string {
+export function typeLine(p: { name: string; text?: string; token?: boolean }, db: CardDb): string {
   const c = getCard(db, p.name);
   if (c) return c.types ?? "";
   const t = p.text ?? "";
@@ -580,24 +580,25 @@ function typeLine(p: { name: string; text?: string; token?: boolean }, db: CardD
   return types.join(" ");
 }
 
-function permText(p: Perm, db: CardDb): string {
+export function permText(p: Perm, db: CardDb): string {
   if (p.text) return p.text;
   const c = getCard(db, p.name);
   return c ? [...c.keywords.map((k) => k.split(":")[0]), c.oracle].join("\n") : "";
 }
 
-function power(pt?: string): number {
+export function power(pt?: string): number {
   const m = (pt ?? "").match(/^(-?\d+|\*)\//);
   return m && m[1] !== "*" ? Math.max(0, Number(m[1])) : 0;
 }
 
-function keywordsOf(text: string): string {
+export function keywordsOf(text: string): string {
   const kws = ["Flying", "Reach", "First strike", "Double strike", "Trample", "Deathtouch", "Lifelink", "Hexproof", "Indestructible", "Menace"];
-  const found = kws.filter((k) => new RegExp(`\\b${k}\\b`, "i").test(text));
+  const kwText = text.replace(/can't be blocked[^.\n]*\.?/gi, "").replace(/creatures with [a-z ]+/gi, "");   // "except by creatures with flying" is not Flying
+  const found = kws.filter((k) => new RegExp(`\\b${k}\\b`, "i").test(kwText));
   return found.length ? ` (${found.map((k) => k.toLowerCase()).join(", ")})` : "";
 }
 
-function unblockable(a: Perm, blockers: Perm[], db: CardDb): boolean {
+export function unblockable(a: Perm, blockers: Perm[], db: CardDb): boolean {
   const text = permText(a, db);
   const has = (p: Perm, kw: string) => new RegExp(`\\b${kw}\\b`, "i").test(permText(p, db));
   if (/can't be blocked\b(?! except| by)/i.test(text) || /can't be blocked\.$/im.test(text)) return true;
@@ -608,7 +609,7 @@ function unblockable(a: Perm, blockers: Perm[], db: CardDb): boolean {
 }
 
 /** From the recent log: did the opponent lose life since the current turn started? Undefined when the log doesn't reach back. */
-function opponentLostLifeThisTurn(st: GameState): boolean | undefined {
+export function opponentLostLifeThisTurn(st: GameState): boolean | undefined {
   const log = st.recentLog ?? [];
   const me = st.youAre;
   if (!me) return undefined;

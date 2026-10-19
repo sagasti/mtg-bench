@@ -10,6 +10,7 @@ import { type ChatMessage, type CompleteArgs, DecisionClock, type FailureDetail,
 import { info, type Jsonl } from "../util/log.ts";
 import { hasPrompt, renderRequest, renderTemplate, systemPrompt } from "./render.ts";
 import { mulliganVerdict } from "../knowledge/mulligan.ts";
+import { suicidalAttackers } from "../knowledge/combat.ts";
 import { deckKey, deckStats, renderDeckStats } from "../deckbuild/stats.ts";
 
 export class LlmAgent implements DecisionAgent {
@@ -49,6 +50,8 @@ export class LlmAgent implements DecisionAgent {
     const clock = new DecisionClock(this.event.decisionTimeoutSec * 1000);
     let usage: TokenUsage = { ...ZERO_USAGE };
     const toolCalls: Record<string, number> = {};
+    if (auraPolicy) toolCalls.aura_policy = auraPolicy;
+    if (combatPolicy) toolCalls.combat_policy = combatPolicy;
     let modelCalls = 0, truncated = 0;
     let specViolation: string | undefined;
     const result = (notes: string | null, extra: Partial<MatchNotesResult> = {}): MatchNotesResult =>
@@ -110,7 +113,31 @@ export class LlmAgent implements DecisionAgent {
     }
   }
 
+  /** Pilot patch: the last confirm question of this game and how many times in a row it was asked and answered the same way. */
+  private lastConfirm: { key: string; count: number; choice: string } | undefined;
+
   async decide(req: DecisionRequest, ctx: DecideContext, onCall: CallObserver): Promise<AgentResult> {
+    // Pilot patch: Forge re-asks the same yes/no (e.g. "Sacrifice Eldrazi Spawn Token?" to pay a cost) forever while the
+    // answer stays No; 450 identical confirms ate an hour and the match. After three identical answers in a row, flip it.
+    if (req.kind === "confirm" && req.options.length === 2) {
+      const key = `${ctx.matchId}:${ctx.game}:${req.prompt}`;
+      const last = this.lastConfirm;
+      if (last && last.key === key && last.count >= 3) {
+        const other = req.options.find((o) => o.id !== last.choice) ?? req.options[0];
+        info(`[${this.seat.id}] loop breaker: same confirm asked ${last.count} times, answering ${other.label}`);
+        this.lastConfirm = { key, count: 0, choice: other.id };
+        return { response: { choice: [other.id], rationale: `loop breaker: the same question was answered "${req.options.find((o) => o.id === last.choice)?.label}" ${last.count} times in a row` }, usage: ZERO_USAGE, modelCalls: 0, toolCalls: { loop_break: 1 }, invalidAttempts: 0 };
+      }
+      const r = await this.decideInner(req, ctx, onCall);
+      const choice = r.response?.choice?.[0] ?? "";
+      this.lastConfirm = last && last.key === key && last.choice === choice ? { key, count: last.count + 1, choice } : { key, count: 1, choice };
+      return r;
+    }
+    this.lastConfirm = undefined;
+    return this.decideInner(req, ctx, onCall);
+  }
+
+  private async decideInner(req: DecisionRequest, ctx: DecideContext, onCall: CallObserver): Promise<AgentResult> {
     // Pilot patch: clear-cut mulligans are a policy, not a model call (the model kept one-landers against the verdict).
     if (req.kind === "mulligan" && this.event.mulliganPolicy === "strict" && this.event.mulliganMath) {
       const v = mulliganVerdict(req, this.db);
@@ -119,6 +146,48 @@ export class LlmAgent implements DecisionAgent {
       if (v && opt) {
         info(`[${this.seat.id}] mulligan policy: ${v.action} (${v.why})`);
         return { response: { choice: [opt.id], rationale: `mulligan policy (${v.verdict}): ${v.why}` }, usage: ZERO_USAGE, modelCalls: 0, toolCalls: { mulligan_policy: 1 }, invalidAttempts: 0 };
+      }
+    }
+    // Pilot patch: a buff Aura this seat casts never goes on a token or a non-hexproof creature while a hexproof creature
+    // of ours is a legal target (it eats their removal and the aura goes with it). The options are narrowed before rendering.
+    let auraPolicy = 0;
+    if (this.event.auraPolicy === "strict" && req.kind === "priority") {
+      const perms: any[] = (req.state as any)?.you?.battlefield ?? [];
+      const creatures = perms.filter((p) => p.pt);
+      if (creatures.length && creatures.every((p) => p.token) && !creatures.some((p) => /\bHexproof\b/i.test(p.text ?? ""))) {
+        const drop = req.options.filter((o) => { const m = o.label.match(/^cast spell: your (.+?) \[Hand\]/); const c = m ? getCard(this.db, m[1]) : undefined; return !!c && /\bAura\b/.test(c.types) && /^Enchant creature/m.test(c.oracle) && /Enchanted creature (gets \+|has |can't be blocked)/.test(c.oracle); });
+        if (drop.length && drop.length < req.options.length) {
+          req = { ...req, options: req.options.filter((o) => !drop.includes(o)) };
+          auraPolicy = 1;
+          info(`[${this.seat.id}] aura policy: only tokens on board, not offering ${drop.map((o) => o.label.replace(/^cast spell: your /, "").replace(/ \[Hand\].*$/, "")).join(", ")}`);
+        }
+      }
+    }
+    // Pilot patch: an aura-wearing attacker without first strike never attacks into an untapped deathtouch blocker unless
+    // the attack is lethal (the model kept trading a creature with three auras for one Baleful Strix).
+    let combatPolicy = 0;
+    if (this.event.combatPolicy === "strict" && this.event.combatMath && req.kind === "attackers") {
+      const drop = suicidalAttackers(req, this.db);
+      if (drop.length) {
+        const ids = new Set(drop.map((d) => d.id));
+        req = { ...req, options: req.options.filter((o) => !ids.has(o.id)) };
+        combatPolicy = drop.length;
+        info(`[${this.seat.id}] combat policy: not offering ${drop.map((d) => `${d.name} (${d.auras} aura${d.auras === 1 ? "" : "s"}, dies to ${d.blocker})`).join(", ")}`);
+      }
+    }
+    if (this.event.auraPolicy === "strict" && req.kind === "targets") {
+      const m = req.prompt.match(/^You are casting (.+?); choose its targets\./m);
+      const card = m ? getCard(this.db, m[1]) : undefined;
+      if (card && /\bAura\b/.test(card.types) && /^Enchant creature/m.test(card.oracle) && /Enchanted creature (gets \+|has |can't be blocked)/.test(card.oracle) && !/can't attack|can't block|doesn't untap/i.test(card.oracle)) {
+        const perms = new Map<string, any>(((req.state as any)?.you?.battlefield ?? []).map((p: any) => [p.id, p]));
+        const own = req.options.filter((o) => /^select card as target: your /.test(o.label));
+        const hex = own.filter((o) => { const p = perms.get(o.id); return p && !p.token && /\bHexproof\b/i.test(p.text ?? ""); });
+        if (hex.length && hex.length < req.options.length) {
+          const keep = new Set(hex.map((o) => o.id));
+          req = { ...req, options: req.options.filter((o) => keep.has(o.id)) };
+          auraPolicy = 1;
+          info(`[${this.seat.id}] aura policy: ${card.name} limited to hexproof targets (${hex.map((o) => o.label.replace(/^select card as target: your /, "")).join(", ")})`);
+        }
       }
     }
     const system = systemPrompt(this.event, req.phase, ctx.brief);
@@ -194,7 +263,8 @@ export class LlmAgent implements DecisionAgent {
     try {
       for (let round = 0; round < maxRounds; round++) {
         let out;
-        const fast = fellBack ? { reasoningEffort: this.seat.fallbackReasoningEffort, maxTokens: 4096 } : {};
+        const byKind = this.seat.reasoningEffortByKind?.[req.kind];
+        const fast = fellBack ? { reasoningEffort: this.seat.fallbackReasoningEffort, maxTokens: 4096 } : byKind ? { reasoningEffort: byKind } : {};
         try { out = await this.call({ system, messages, tools, debug, ...fast }, clock, round, onCall); }
         catch (e: any) {
           // Pilot patch: one fast re-ask (reasoning off) under a fresh short budget instead of the null action.

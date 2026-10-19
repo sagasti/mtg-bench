@@ -11,15 +11,16 @@
  *     "blue-terror|*": "..."
  */
 import fs from "node:fs";
+import path from "node:path";
 import YAML from "yaml";
 import type { CardDb } from "../cards/db.ts";
 import type { DecisionRequest } from "../types.ts";
 
-interface Archetype { name: string; signature: string[] }
+export interface Archetype { name: string; signature: string[]; deck?: string }
 interface Plans { archetypes: Record<string, Archetype>; plans: Record<string, string> }
 
 const cache = new Map<string, { mtime: number; plans: Plans }>();
-function load(file: string): Plans {
+export function loadPlans(file: string): Plans {
   const mtime = fs.statSync(file).mtimeMs;
   const hit = cache.get(file);
   if (hit && hit.mtime === mtime) return hit.plans;
@@ -38,9 +39,34 @@ function identify(names: Set<string>, archetypes: Record<string, Archetype>): { 
   return best;
 }
 
+/** Cards the opponent has shown (battlefield, graveyard, exile, stack, recent log). */
+export function opponentSeen(st: any): Set<string> {
+  const nameOf = (x: any) => (typeof x === "string" ? x : x?.name) as string | undefined;
+  const theirs = new Set<string>();
+  for (const z of ["battlefield", "graveyard", "exile"]) for (const c of st?.opponent?.[z] ?? []) { const n = nameOf(c); if (n) theirs.add(n); }
+  for (const s of st?.stack ?? []) if (s?.controller === "opponent" && s.source) theirs.add(s.source);
+  const me = String(st?.youAre ?? "");
+  for (const line of st?.recentLog ?? []) {
+    const m = String(line).match(/^(P\d) (?:cast|played|activated) (.+?)(?: targeting .*)?\.?$/);
+    if (m && m[1] !== me) theirs.add(m[2].replace(/ \(\d+\)$/, ""));
+  }
+  return theirs;
+}
+
+/** The opponent's archetype (if identified) with its known decklist path resolved against the plans file. */
+export function opponentArchetype(req: DecisionRequest, file: string): { slug: string; name: string; hits: string[]; deckFile?: string } | undefined {
+  let plans: Plans;
+  try { plans = loadPlans(file); } catch { return undefined; }
+  const opp = identify(opponentSeen(req.state), plans.archetypes);
+  if (!opp) return undefined;
+  const a = plans.archetypes[opp.slug];
+  const deckFile = a.deck ? path.resolve(path.dirname(file), a.deck) : undefined;
+  return { slug: opp.slug, name: a.name, hits: opp.hits, deckFile: deckFile && fs.existsSync(deckFile) ? deckFile : undefined };
+}
+
 export function gamePlan(req: DecisionRequest, file: string, _db: CardDb): string | undefined {
   let plans: Plans;
-  try { plans = load(file); } catch { return undefined; }
+  try { plans = loadPlans(file); } catch { return undefined; }
   const st = req.state as any;
   if (!st?.you) return undefined;
   const nameOf = (x: any) => (typeof x === "string" ? x : x?.name) as string | undefined;

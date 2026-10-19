@@ -33,6 +33,8 @@ export interface SeatConfig {
   thinkingBudget?: number;
   /** OpenAI-style reasoning effort ("low" | "medium" | "high"). */
   reasoningEffort?: string;
+  /** Pilot patch: reasoning effort per decision kind (e.g. { attackers: high, blockers: high }); the others use reasoningEffort. */
+  reasoningEffortByKind?: Record<string, string>;
   /**
    * Pilot patch: when a decision's time budget runs out, instead of forfeiting the agent is asked once more with this
    * reasoning effort (e.g. "none") under a fresh budget of fallbackTimeoutSec (default 60). The decision is recorded
@@ -122,6 +124,14 @@ export interface EventConfig {
   mulliganMath?: boolean;
   /** Pilot patch: "strict" = the clear-cut mulligan verdicts (no land, one-lander without a plan, 5+ lands on 7) are answered by the harness, not the model. Default "advise". */
   mulliganPolicy?: "advise" | "strict";
+  /** Pilot patch: "Combat" section (legal single blocks and their outcome, the race). */
+  combatMath?: boolean;
+  /** Pilot patch: "Their open mana" section (open mana, instant-speed answers left in their known list, our mana after each cast). */
+  openMana?: boolean;
+  /** Pilot patch: strict = an Aura this seat casts never targets a token or non-hexproof creature when one of its hexproof creatures is a legal target. */
+  auraPolicy?: "advise" | "strict";
+  /** Pilot patch: strict = an aura-wearing attacker without first strike is not offered when an untapped deathtouch creature can block it and the attack is not lethal (needs combatMath). */
+  combatPolicy?: "advise" | "strict";
   /** Pilot patch: YAML with archetype signatures and matchup plans; a "Game plan" section is rendered when the seat's deck is recognised. */
   plansFile?: string;
   /** Pilot patch: decide play/draw by policy so that odd matches put seat 0 on the play and even matches seat 1 (balanced bars). */
@@ -240,6 +250,11 @@ export function validateConfig(cfg: BenchConfig) {
   if (cfg.event.mulliganMath !== undefined && typeof cfg.event.mulliganMath !== "boolean") errs.push("event.mulliganMath must be true or false");
   if (cfg.event.mulliganPolicy !== undefined && !["advise", "strict"].includes(cfg.event.mulliganPolicy)) errs.push("event.mulliganPolicy must be advise or strict");
   if (cfg.event.mulliganPolicy === "strict" && !cfg.event.mulliganMath) errs.push("event.mulliganPolicy strict needs event.mulliganMath: true");
+  if (cfg.event.combatMath !== undefined && typeof cfg.event.combatMath !== "boolean") errs.push("event.combatMath must be true or false");
+  if (cfg.event.openMana !== undefined && typeof cfg.event.openMana !== "boolean") errs.push("event.openMana must be true or false");
+  if (cfg.event.auraPolicy !== undefined && !["advise", "strict"].includes(cfg.event.auraPolicy)) errs.push("event.auraPolicy must be advise or strict");
+  if (cfg.event.combatPolicy !== undefined && !["advise", "strict"].includes(cfg.event.combatPolicy)) errs.push("event.combatPolicy must be advise or strict");
+  if (cfg.event.combatPolicy === "strict" && !cfg.event.combatMath) errs.push("event.combatPolicy strict needs event.combatMath: true");
   if (cfg.event.playDrawAlternate !== undefined && typeof cfg.event.playDrawAlternate !== "boolean") errs.push("event.playDrawAlternate must be true or false");
   if (cfg.event.plansFile !== undefined && (typeof cfg.event.plansFile !== "string" || !fs.existsSync(cfg.event.plansFile))) errs.push("event.plansFile must point to an existing YAML file");
   const w = cfg.event.providerRetryWindowSec;
