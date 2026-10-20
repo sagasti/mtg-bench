@@ -98,6 +98,11 @@ export function combatMath(req: DecisionRequest, db: CardDb): string | undefined
       lines.push(`- ${label(a)}: ${opts.length ? opts.join("; ") : "no legal single block"}.`);
     }
     if (!blockers.length) lines.push("You have no untapped creature to block with.");
+    const theirPower = theirs.filter((p) => !/\bDefender\b/i.test(permText(p, db))).reduce((s, p) => s + power(p.pt), 0);
+    const myPower = mine.filter((p) => !/\bDefender\b/i.test(permText(p, db))).reduce((s, p) => s + power(p.pt), 0);
+    const t = (l: number, d: number) => (d > 0 ? Math.ceil(l / d) : Infinity);
+    const die = t(life - incoming, theirPower), kill = t(st.opponent.life ?? 0, myPower);
+    if (incoming < life && theirPower && die <= kill) lines.push(`⚠ Behind in the race: after this attack their ${theirPower} power kills you in ${die} more attack${die === 1 ? "" : "s"}, your ${myPower} power needs ${kill === Infinity ? "∞" : kill}. Blocks that trade or chump their biggest attacker buy a turn.`);
     return `## Combat\nComputed by the harness from the visible board: single blocks, no pump or tricks.\n${lines.map((l) => (l.startsWith("- ") ? l : `- ${l}`)).join("\n")}`;
   }
 
@@ -156,4 +161,43 @@ export function suicidalAttackers(req: DecisionRequest, db: CardDb): { id: strin
     if (opt) out.push({ id: opt.id, name: a.name, blocker: killer.name, auras });
   }
   return out;
+}
+
+
+/**
+ * Pilot patch (combatPolicy strict): when the attack is lethal if unblocked and single blocks can bring it under our
+ * life, the blocks to declare: biggest attackers first, for each the best available blocker (kills and survives >
+ * trade > chump with the cheapest creature), until the remaining damage is survivable. Undefined when not lethal or
+ * when no assignment saves us (then the model decides).
+ */
+export function lethalBlocks(req: DecisionRequest, db: CardDb): { ids: string[]; why: string } | undefined {
+  if (req.phase !== "game" || req.kind !== "blockers") return undefined;
+  const st = req.state as GameState | undefined;
+  if (!st?.you || !st.opponent) return undefined;
+  const attackers = (st.combat ?? []).filter((c) => c.attacking === "you").map((p) => fighter(p, db));
+  const life = st.you.life ?? 0;
+  const incoming = attackers.reduce((s, a) => s + a.pow, 0);
+  if (!attackers.length || incoming < life) return undefined;
+  const blockers = (st.you.battlefield ?? []).filter((p) => p.pt && !p.tapped).map((p) => fighter(p, db));
+  const pair = new Map<string, string>();   // "blockerId->attackerId" -> option id
+  for (const o of req.options) { const m = o.id.match(/^(c\d+)->(c\d+)$/); if (m) pair.set(`${m[1]}->${m[2]}`, o.id); }
+  const used = new Set<string>(); const ids: string[] = []; const why: string[] = [];
+  let remaining = incoming;
+  const auras = (f: Fighter) => [...f.text.matchAll(/=Attached: ([^=]+)=/g)].flatMap((m) => m[1].split(",")).length;
+  for (const a of [...attackers].sort((x, y) => y.pow - x.pow)) {
+    if (remaining < life) break;
+    let best: { b: Fighter; score: number; through: number } | undefined;
+    for (const b of blockers) {
+      if (used.has(b.p.id ?? "") || !pair.has(`${b.p.id}->${a.p.id}`) || !canBlock(a, b)) continue;
+      const r = fight(a, b);
+      const score = (r.aDies && !r.bDies ? 300 : r.aDies && r.bDies ? 200 : 100) - auras(b) * 10 - b.pow - (r.umbra ? 5 : 0);
+      if (!best || score > best.score) best = { b, score, through: r.through };
+    }
+    if (!best) continue;
+    used.add(best.b.p.id ?? ""); ids.push(pair.get(`${best.b.p.id}->${a.p.id}`)!);
+    remaining -= a.pow - best.through;
+    why.push(`${best.b.name} blocks ${a.name}`);
+  }
+  if (!ids.length || remaining >= life) return undefined;
+  return { ids, why: `${incoming} incoming vs ${life} life: ${why.join(", ")} (${remaining} gets through)` };
 }

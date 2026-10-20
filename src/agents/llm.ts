@@ -10,7 +10,8 @@ import { type ChatMessage, type CompleteArgs, DecisionClock, type FailureDetail,
 import { info, type Jsonl } from "../util/log.ts";
 import { hasPrompt, renderRequest, renderTemplate, systemPrompt } from "./render.ts";
 import { mulliganVerdict } from "../knowledge/mulligan.ts";
-import { suicidalAttackers } from "../knowledge/combat.ts";
+import { lethalBlocks, suicidalAttackers } from "../knowledge/combat.ts";
+import { castingPlan } from "../knowledge/interaction.ts";
 import { deckKey, deckStats, renderDeckStats } from "../deckbuild/stats.ts";
 
 export class LlmAgent implements DecisionAgent {
@@ -56,6 +57,7 @@ export class LlmAgent implements DecisionAgent {
     const toolCalls: Record<string, number> = {};
     if (auraPolicy) toolCalls.aura_policy = auraPolicy;
     if (combatPolicy) toolCalls.combat_policy = combatPolicy;
+    if (sequencePolicy) toolCalls.sequence_policy = sequencePolicy;
     let modelCalls = 0, truncated = 0;
     let specViolation: string | undefined;
     const result = (notes: string | null, extra: Partial<MatchNotesResult> = {}): MatchNotesResult =>
@@ -192,6 +194,25 @@ export class LlmAgent implements DecisionAgent {
           auraPolicy = 1;
           info(`[${this.seat.id}] aura policy: ${card.name} limited to hexproof targets (${hex.map((o) => o.label.replace(/^select card as target: your /, "")).join(", ")})`);
         }
+      }
+    }
+    // Pilot patch: lethal on the table and single blocks that stop it are not a judgment call (the model never blocked).
+    if (this.event.combatPolicy === "strict" && this.event.combatMath && req.kind === "blockers") {
+      const lb = lethalBlocks(req, this.db);
+      if (lb) {
+        info(`[${this.seat.id}] block policy: ${lb.why}`);
+        return { response: { choice: lb.ids, rationale: `block policy: ${lb.why}` }, usage: ZERO_USAGE, modelCalls: 0, toolCalls: { block_policy: 1 }, invalidAttempts: 0 };
+      }
+    }
+    // Pilot patch: no cantrip/ramp before the spell that matters while that would leave it exposed to a live tax counter.
+    let sequencePolicy = 0;
+    if (this.event.sequencePolicy === "strict" && this.event.openMana && req.kind === "priority") {
+      const plan = castingPlan(req, this.db, this.event.plansFile);
+      if (plan?.drop.length) {
+        const ids = new Set(plan.drop.map((d) => d.id));
+        req = { ...req, options: req.options.filter((o) => !ids.has(o.id)) };
+        sequencePolicy = plan.drop.length;
+        info(`[${this.seat.id}] sequence policy: not offering ${plan.drop.map((d) => `${d.name} (${d.reason})`).join("; ")}`);
       }
     }
     const system = systemPrompt(this.event, req.phase, ctx.brief);

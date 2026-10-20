@@ -7,14 +7,14 @@ import YAML from "yaml";
 import { getCard, loadDb } from "../cards/db.ts";
 import type { DecisionOption, DecisionRequest } from "../types.ts";
 import { combatMath } from "./combat.ts";
-import { openMana } from "./interaction.ts";
+import { castingPlan, openMana } from "./interaction.ts";
 const args = process.argv.slice(2); const flags: Record<string, string> = {}; const pos: string[] = [];
 for (let i = 0; i < args.length; i++) { if (args[i].startsWith("--")) { if (args[i] === "--verbose") { flags.verbose = "1"; continue; } flags[args[i].slice(2)] = args[i + 1]; i++; } else pos.push(args[i]); }
 const [run, plans] = pos; const seat = flags.seat ?? "glm";
 const db = loadDb();
 const jl = (f: string) => fs.readFileSync(path.join(run, f), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
 const prompts = new Map<string, string>(jl("rendered-prompts.jsonl").filter((r) => r.seat === seat).map((r) => [r.requestId, r.prompt]));
-const counts: Record<string, number> = { decisions: 0, attackers: 0, risky_attack: 0, blockers: 0, no_block_lethal: 0, declined_good_block: 0, aura_targets: 0, aura_on_non_hexproof: 0, casts: 0, pierce_exposed: 0, cast_into_open_counter: 0, cast_tapped_out: 0, pass_tapped_out_with_castable: 0 };
+const counts: Record<string, number> = { decisions: 0, attackers: 0, risky_attack: 0, blockers: 0, no_block_lethal: 0, declined_good_block: 0, aura_targets: 0, aura_on_non_hexproof: 0, casts: 0, pierce_exposed: 0, bait_before_key: 0, cast_into_open_counter: 0, cast_tapped_out: 0, pass_tapped_out_with_castable: 0 };
 const notes: string[] = [];
 for (const d of jl("decisions.jsonl")) {
   if (d.seat !== seat || d.phase !== "game" || !d.valid || d.forfeit) continue;
@@ -59,6 +59,8 @@ for (const d of jl("decisions.jsonl")) {
     const pierce = /can pay now: [^\n]*Spell Pierce ×/.test(open); const counter = /can pay now: [^\n]*Counterspell ×/.test(open);
     if (cast) {
       counts.casts++;
+      const plan = castingPlan(req, db, plans);
+      if (plan?.drop.some((d) => d.id === cast.id)) { counts.bait_before_key++; notes.push(`${tag} ${plan.drop.find((d) => d.id === cast.id)!.name}: ${plan.drop.find((d) => d.id === cast.id)!.reason}`); }
       const name = cast.label.replace(/^cast spell: your /, "").replace(/ \[Hand\].*$/, "").replace(/ \(.*$/, "");
       const c = getCard(db, name);
       if (tappedOut) counts.cast_tapped_out++;
