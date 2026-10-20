@@ -25,7 +25,11 @@ export class LlmAgent implements DecisionAgent {
     private kb: KnowledgeBase,
     /** When set, every rendered decision prompt is appended here (event.recordPrompts). */
     private promptLog?: Jsonl,
-  ) { this.kind = seat.provider; }
+  ) {
+    this.kind = seat.provider;
+    // Pilot patch: a seat may switch the knowledge sections / policies on or off for itself (asymmetric A/B in one run).
+    if (seat.eventOverrides) this.event = { ...event, ...seat.eventOverrides };
+  }
 
   get model() { return this.provider.model; }
 

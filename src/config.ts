@@ -49,6 +49,8 @@ export interface SeatConfig {
   decisionTimeoutSec?: number;
   /** Extra JSON merged into every request body (provider-specific knobs). */
   extraBody?: Record<string, unknown>;
+  /** Pilot patch: per-seat overrides of the knowledge/policy event flags (to pit an expert seat against a frozen one in the same run). */
+  eventOverrides?: Partial<Pick<EventConfig, "damageMath" | "mulliganMath" | "mulliganPolicy" | "plansFile" | "combatMath" | "openMana" | "auraPolicy" | "combatPolicy">>;
   headers?: Record<string, string>;
   /** Max concurrent in-flight model calls for this seat (rate-limit guard); unset = no limit. Queue time isn't charged to the agent. */
   concurrency?: number;
