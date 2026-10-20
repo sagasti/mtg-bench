@@ -14,7 +14,7 @@ const [run, plans] = pos; const seat = flags.seat ?? "glm";
 const db = loadDb();
 const jl = (f: string) => fs.readFileSync(path.join(run, f), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
 const prompts = new Map<string, string>(jl("rendered-prompts.jsonl").filter((r) => r.seat === seat).map((r) => [r.requestId, r.prompt]));
-const counts: Record<string, number> = { decisions: 0, attackers: 0, risky_attack: 0, blockers: 0, no_block_lethal: 0, declined_good_block: 0, aura_targets: 0, aura_on_non_hexproof: 0, casts: 0, pierce_exposed: 0, bait_before_key: 0, cast_into_open_counter: 0, cast_tapped_out: 0, pass_tapped_out_with_castable: 0 };
+const counts: Record<string, number> = { decisions: 0, attackers: 0, risky_attack: 0, blockers: 0, no_block_lethal: 0, declined_good_block: 0, declined_trade: 0, aura_targets: 0, aura_on_non_hexproof: 0, casts: 0, pierce_exposed: 0, bait_before_key: 0, cast_into_open_counter: 0, cast_tapped_out: 0, pass_tapped_out_with_castable: 0 };
 const notes: string[] = [];
 for (const d of jl("decisions.jsonl")) {
   if (d.seat !== seat || d.phase !== "game" || !d.valid || d.forfeit) continue;
@@ -39,7 +39,8 @@ for (const d of jl("decisions.jsonl")) {
   if (d.kind === "blockers") {
     counts.blockers++;
     if (/⚠ LETHAL if unblocked/.test(combat) && !chosen.length) { counts.no_block_lethal++; notes.push(`${tag} no block vs lethal`); }
-    if (/\((good block|trade)\)/.test(combat) && !chosen.length) { counts.declined_good_block++; notes.push(`${tag} declined a good block/trade`); }
+    if (/\(good block\)/.test(combat) && !chosen.length) { counts.declined_good_block++; notes.push(`${tag} declined a block that kills and survives`); }
+    else if (/\(trade\)/.test(combat) && !chosen.length) counts.declined_trade++;   // a judgment call (racing, keeping an aura target): counted, not flagged
   }
   if (d.kind === "targets") {
     const mm = head.match(/^You are casting (.+?); choose its targets\./m); const card = mm ? getCard(db, mm[1]) : undefined;
