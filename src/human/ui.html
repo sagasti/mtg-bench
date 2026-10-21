@@ -51,10 +51,10 @@
   button.go:disabled { opacity:.4; cursor:not-allowed; }
   .row { display:flex; gap:10px; align-items:center; margin-top:8px; flex-wrap:wrap; }
   #err { color:var(--bad); }
-  #overlay { position:fixed; inset:0; background:#000c; display:none; align-items:center; justify-content:center; z-index:50; font-size:28px; text-align:center; padding:30px; }
+  #overlay { position:fixed; inset:0; background:#000c; display:none; flex-direction:column; align-items:center; justify-content:center; z-index:50; font-size:28px; text-align:center; padding:30px; }
   #overlay.show { display:flex; }
   dialog { background:var(--panel); color:var(--txt); border:1px solid var(--line); border-radius:8px; max-width:640px; }
-  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; padding-bottom: 260px; } .card, .card img, .card .ph { width:84px; } .card img, .card .ph { height:118px; } .card .ph { font-size:9px; } .card.tapped { transform:rotate(90deg) translateY(-17px); margin:0 17px; } }
 </style>
 </head>
 <body>
@@ -108,10 +108,10 @@ function connect() {
   es.addEventListener("game", (e) => {
     const d = JSON.parse(e.data);
     if (d.event === "start") { $("game").textContent = `Partida ${d.game}${d.onThePlay !== undefined ? (d.youPlay ? " · salís vos" : " · sale el rival") : ""}`; $("overlay").classList.remove("show"); }
-    if (d.event === "end") { $("overlay").innerHTML = d.youWon ? "🎉 Ganaste la partida" : d.youWon === false ? "Perdiste la partida" : "Empate"; $("overlay").innerHTML += `<div class="small" style="font-size:16px;margin-top:10px">${esc(d.reason || "")} · turno ${esc(d.turns ?? "?")}</div>`; $("overlay").classList.add("show"); }
+    if (d.event === "end") { $("overlay").innerHTML = d.youWon ? "🎉 Ganaste la partida" : d.youWon === false ? "Perdiste la partida" : "Empate"; $("overlay").innerHTML += `<div class="small" style="font-size:16px;margin-top:10px">${esc(d.reason || "")} · turno ${esc(d.turns ?? "?")}</div><div style="margin-top:18px;font-size:16px"><a href="/" style="color:var(--acc)">Volver al lobby</a></div>`; $("overlay").classList.add("show"); }
   });
-  es.addEventListener("over", (e) => { const d = JSON.parse(e.data); idle("Match terminado"); $("overlay").innerHTML = `Match terminado: ${esc(d.summary || "")}`; $("overlay").classList.add("show"); });
-  es.onerror = () => { setStatus("desconectado, reintentando…"); };
+  es.addEventListener("over", (e) => { const d = JSON.parse(e.data); idle("Match terminado"); $("overlay").innerHTML = `Match terminado: ${esc(d.summary || "")}<div style="margin-top:18px;font-size:16px"><a href="/" style="color:var(--acc)">Volver al lobby</a></div>`; $("overlay").classList.add("show"); });
+  es.onerror = () => { setStatus("desconectado, reintentando…"); checkGone(); };
 }
 function setStatus(s, me) { const el = $("status"); el.textContent = s; el.className = "st" + (me ? " me" : ""); }
 function idle(msg) { $("decision").className = "idle"; $("prompt").textContent = msg; $("opts").innerHTML = ""; $("go").style.display = "none"; $("hint").textContent = ""; $("err").textContent = ""; setStatus(msg); }
@@ -177,10 +177,16 @@ async function submit() {
   // The next decision may have arrived over SSE while the POST was in flight: never wipe it.
   if (cur && cur.rid === rid) { cur = null; idle(auto ? "Pasando hasta tu turno…" : "Enviado. El rival está jugando…"); }
 }
+// The game process is gone (abandoned from the lobby, crashed, or finished and closed): say so instead of a frozen table.
+let goneStrikes = 0;
+async function checkGone() {
+  try { const r = await fetch(`/pending?t=${encodeURIComponent(token)}`); if (r.ok) { goneStrikes = 0; return; } if (r.status === 502 || r.status === 404) goneStrikes++; } catch { goneStrikes++; }
+  if (goneStrikes >= 2 && !$("overlay").classList.contains("show")) { cur = null; idle("La partida ya no está en curso"); $("overlay").innerHTML = `La partida terminó o fue abandonada<div style="margin-top:18px;font-size:16px"><a href="/" style="color:var(--acc)">Volver al lobby</a></div>`; $("overlay").classList.add("show"); }
+}
 // Belt and braces: if we think nothing is pending but the server does (a missed event), pick it up.
 setInterval(async () => {
-  if (cur) return;
-  try { const d = await (await fetch(`/pending?t=${encodeURIComponent(token)}`)).json(); if (d && d.rid && d.rid !== lastAnswered) showDecision(d); } catch {}
+  // Also while a decision is pending: if the game process died underneath us, /pending stops answering and we say so.
+  try { const r = await fetch(`/pending?t=${encodeURIComponent(token)}`); if (!r.ok) { if (r.status === 502 || r.status === 404) { goneStrikes++; if (goneStrikes >= 2) checkGone(); } return; } goneStrikes = 0; if (cur) return; const d = await r.json(); if (d && d.rid && d.rid !== lastAnswered) showDecision(d); } catch {}
 }, 4000);
 
 function cardEl(c, zone) {
