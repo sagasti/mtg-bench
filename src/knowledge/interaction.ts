@@ -190,7 +190,7 @@ export function liveCounters(req: DecisionRequest, db: CardDb, plansFile?: strin
   return out;
 }
 
-const BAIT_RE = /draw a card|scry \d|surveil \d|search your library|reveal the top|^Enchant land|^Enchant Forest/im;
+export const BAIT_RE = /draw a card|scry \d|surveil \d|search your library|reveal the top|^Enchant land|^Enchant Forest/im;
 interface Castable { id: string; name: string; cmc: number; role: "key" | "bait"; creature: boolean }
 
 /**

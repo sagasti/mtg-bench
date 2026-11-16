@@ -7,15 +7,20 @@ import YAML from "yaml";
 import { getCard, loadDb } from "../cards/db.ts";
 import type { DecisionOption, DecisionRequest } from "../types.ts";
 import { combatMath } from "./combat.ts";
-import { castingPlan, openMana } from "./interaction.ts";
+import { BAIT_RE, castingPlan, openMana } from "./interaction.ts";
 const args = process.argv.slice(2); const flags: Record<string, string> = {}; const pos: string[] = [];
 for (let i = 0; i < args.length; i++) { if (args[i].startsWith("--")) { if (args[i] === "--verbose") { flags.verbose = "1"; continue; } flags[args[i].slice(2)] = args[i + 1]; i++; } else pos.push(args[i]); }
 const [run, plans] = pos; const seat = flags.seat ?? "glm";
 const db = loadDb();
 const jl = (f: string) => fs.readFileSync(path.join(run, f), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
 const prompts = new Map<string, string>(jl("rendered-prompts.jsonl").filter((r) => r.seat === seat).map((r) => [r.requestId, r.prompt]));
-const counts: Record<string, number> = { decisions: 0, attackers: 0, risky_attack: 0, blockers: 0, no_block_lethal: 0, declined_good_block: 0, declined_trade: 0, aura_targets: 0, aura_on_non_hexproof: 0, casts: 0, pierce_exposed: 0, bait_before_key: 0, cast_into_open_counter: 0, cast_tapped_out: 0, pass_tapped_out_with_castable: 0 };
+const counts: Record<string, number> = { decisions: 0, attackers: 0, risky_attack: 0, blockers: 0, no_block_lethal: 0, declined_good_block: 0, declined_trade: 0, aura_targets: 0, aura_on_non_hexproof: 0, casts: 0, pierce_exposed: 0, bait_before_key: 0, cast_into_open_counter: 0, countered: 0, key_countered_with_bait_castable: 0, cast_tapped_out: 0, pass_tapped_out_with_castable: 0 };
 const notes: string[] = [];
+// Casting into open counter mana is not a mistake by itself (against draw-go there is no other time to cast), and a
+// cheap spell that eats the counter did its job. What is counted as a mistake: a spell that matters (not a cantrip or
+// ramp) that WAS countered while a cantrip or ramp spell was castable at that moment and had not been cast first.
+const intoCounter: { match: string; name: string; turn: number; others: string[] }[] = [];
+const seenCounterLines = new Set<string>();
 for (const d of jl("decisions.jsonl")) {
   if (d.seat !== seat || d.phase !== "game" || !d.valid || d.forfeit) continue;
   const p = prompts.get(d.requestId); if (!p) continue;
@@ -52,6 +57,18 @@ for (const d of jl("decisions.jsonl")) {
       if (hexIds.size && chosen.some((x) => !hexIds.has(x.id))) { counts.aura_on_non_hexproof++; notes.push(`${tag} ${card.name} on ${chosen.map((x) => x.label.replace(/^select card as target: /, "")).join(", ")}`); }
     }
   }
+  for (const line of (state?.recentLog ?? []) as string[]) {
+    const m = String(line).match(/ - Counter (.+?) \((\d+)\)\.?$/);
+    if (!m || seenCounterLines.has(`${d.matchId}|${d.game}|${m[2]}`)) continue;
+    const i = intoCounter.findIndex((x) => x.match === `${d.matchId}|${d.game}` && x.name === m[1]);
+    if (i < 0) continue;
+    seenCounterLines.add(`${d.matchId}|${d.game}|${m[2]}`);
+    const hit = intoCounter.splice(i, 1)[0];
+    counts.countered++;
+    const isBait = (n: string) => BAIT_RE.test(getCard(db, n.replace(/ \[\w+\]$/, ""))?.oracle ?? "");
+    const baits = hit.others.filter(isBait);
+    if (!isBait(hit.name) && baits.length) { counts.key_countered_with_bait_castable++; notes.push(`${d.matchId} t${hit.turn} ${hit.name} countered while ${baits.join(", ")} was castable: the bait goes first`); }
+  }
   if (d.kind === "priority" && state.activePlayer === "you" && /^MAIN/.test(String(state.phase))) {
     const cast = chosen.find((x) => /^cast spell: your /.test(x.label));
     const haveCreature = (state?.you?.battlefield ?? []).some((q: any) => q.pt);
@@ -65,7 +82,11 @@ for (const d of jl("decisions.jsonl")) {
       const name = cast.label.replace(/^cast spell: your /, "").replace(/ \[Hand\].*$/, "").replace(/ \(.*$/, "");
       const c = getCard(db, name);
       if (tappedOut) counts.cast_tapped_out++;
-      if (counter) counts.cast_into_open_counter++;
+      if (counter) {
+        counts.cast_into_open_counter++;
+        const others = options.filter((x) => x.id !== cast.id && /^cast spell: your /.test(x.label)).map((x) => x.label.replace(/^cast spell: your /, "").replace(/ \[Hand\].*$/, "").replace(/ \d+\/\d+$/, "")).filter((n) => n !== name);
+        intoCounter.push({ match: `${d.matchId}|${d.game}`, name, turn: Number(state.turn), others });
+      }
       const left = open.match(new RegExp(`${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\(\\d+\\) → (\\d+)`));
       if (pierce && c && !/\bCreature\b/.test(c.types) && left && Number(left[1]) < 2) { counts.pierce_exposed++; notes.push(`${tag} ${name} cast with ${left[1]} mana left vs live Spell Pierce`); }
     } else if (tappedOut && castable && chosen.some((x) => /^Button: OK|^pass/i.test(x.label))) { counts.pass_tapped_out_with_castable++; notes.push(`${tag} passed with castable spells while they were tapped out`); }
