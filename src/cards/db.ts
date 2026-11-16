@@ -47,7 +47,11 @@ export function parseManaCost(cost: string): { cmc: number; colors: string[] } {
 /** Convert Forge "1 G G" to the familiar "{1}{G}{G}". */
 export function prettyCost(cost: string): string {
   if (!cost || cost === "no cost") return "";
-  return cost.trim().split(/\s+/).map((s) => `{${s}}`).join("");
+  // Forge writes a hybrid symbol as two letters ("GU": green OR blue, one mana), "2R" for two-generic-or-red and a trailing P
+  // for Phyrexian. Printed as on the card ({G/U}, {2/R}, {G/P}): "{GU}" was read as "{G}{U}" and the card as uncastable
+  // off a Forest (16/11: Slippery Bogle held in hand on turns 1 to 6).
+  const sym = (s: string) => (/^(?:[WUBRGC2]{2}P?|[WUBRG]P)$/.test(s) ? s.split("").join("/") : s);
+  return cost.trim().split(/\s+/).map((s) => `{${sym(s)}}`).join("");
 }
 
 function parseScript(text: string): CardDef | null {

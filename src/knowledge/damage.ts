@@ -383,6 +383,9 @@ export function parseForgeCost(cost: string): Pips | null {
     if (/^[XYZ]$/.test(tok)) { out.x = true; continue; }
     if (/^[WUBRG]$/.test(tok)) { out.mana++; out.pips[tok] = (out.pips[tok] ?? 0) + 1; continue; }
     if (/^(C|S|[WUBRG2]\/[WUBRGP])$/.test(tok)) { out.mana++; continue; }
+    // Forge's own hybrid / Phyrexian tokens ("GU", "2R", "BP", "GWP"): one mana, payable by either colour, so no fixed pip.
+    if (/^(?:[WUBRGC]{2}P?|[WUBRG]P)$/.test(tok)) { out.mana++; continue; }
+    if (/^2[WUBRG]$/.test(tok)) { out.mana++; continue; }
     return null;
   }
   return out;
