@@ -187,7 +187,7 @@ export class LlmAgent implements DecisionAgent {
       if (drop.length) {
         const ids = new Set(drop.map((d) => d.id));
         // The model is told what was withheld and why: without the line it took the missing creature for "already attacking".
-        const note = `(Not offered as an attacker this turn: ${drop.map((d) => `${d.name} with ${d.auras} aura${d.auras === 1 ? "" : "s"}: ${d.blocker}'s deathtouch block would kill it and its auras`).join("; ")}. It stays home; it attacks again once it has first strike, once enough trample damage goes over the blocker, or once that blocker is tapped or gone.)`;
+        const note = `(Not offered as an attacker this turn: ${drop.map((d) => `${d.name} with ${d.auras} aura${d.auras === 1 ? "" : "s"}: ${d.blocker}'s deathtouch block would kill it and its auras`).join("; ")}. It stays home; it attacks again once it has first strike (Cartouche of Solidarity, Ethereal Armor), or once that blocker is tapped or gone.)`;
         req = { ...req, prompt: `${req.prompt}\n${note}`, options: req.options.filter((o) => !ids.has(o.id)) };
         combatPolicy = drop.length;
         info(`[${this.seat.id}] combat policy: not offering ${drop.map((d) => `${d.name} (${d.auras} aura${d.auras === 1 ? "" : "s"}, dies to ${d.blocker})`).join(", ")}`);

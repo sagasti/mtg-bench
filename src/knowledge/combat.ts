@@ -141,11 +141,13 @@ export function combatMath(req: DecisionRequest, db: CardDb): string | undefined
  * totem armor, and can be blocked by an untapped deathtouch creature: the block kills the creature and every aura on
  * it for one blocker. Returned so the agent can drop those options when the attack is not lethal anyway.
  *
- * Two cases are left to the model instead (16/11: against a Thorn of the Black Rose that never taps, the rule froze a
- * 10/4 trample lifelink creature at home for five turns while a bird army raced it): the block doesn't stop the attack
- * (trample puts at least 3 and at least half of the power through, and the blocker dies too), or the opponent is
- * racing us in the air (their flying power kills us in four turns or fewer and we hold no flying or reach blocker),
- * so waiting for first strike is no longer free.
+ * One case is left to the model instead (16/11: against a Thorn of the Black Rose that never taps, the rule froze a
+ * 10/4 trample lifelink creature at home for five turns while a bird army raced it): the opponent is racing us in the
+ * air (their flying power kills us in four turns or fewer and we hold no flying or reach blocker), so waiting for
+ * first strike is no longer free. A second exception was tried and dropped the same day: "the block doesn't stop the
+ * attack" (trample puts most of the power through and the blocker dies). In the 24-game gate it let a 7/7 and an 11/7
+ * attack into a Baleful Strix on turn 9, both died with every aura, and both games went from won to lost: damage that
+ * tramples over does not pay for the creature.
  */
 export function suicidalAttackers(req: DecisionRequest, db: CardDb): { id: string; name: string; blocker: string; auras: number }[] {
   if (req.phase !== "game" || req.kind !== "attackers") return [];
@@ -168,8 +170,6 @@ export function suicidalAttackers(req: DecisionRequest, db: CardDb): { id: strin
     const killer = blockers.find((b) => canBlock(a, b) && fight(a, b).aDies);
     if (!killer) continue;
     if (raced) continue;
-    const f = fight(a, killer);
-    if (f.bDies && f.through >= 3 && f.through * 2 >= a.pow) continue;
     const opt = req.options.find((o) => o.id === a.p.id || (a.p.id && o.id.startsWith(a.p.id)));
     if (opt) out.push({ id: opt.id, name: a.name, blocker: killer.name, auras });
   }
