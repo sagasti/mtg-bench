@@ -87,7 +87,53 @@ public class AgentControllerHuman extends PlayerControllerHuman {
         }
         if (offered.isEmpty()) return super.getAbilityToPlay(hostCard, abilities, triggerEvent); // nothing passes: let Forge decide
         for (String why : dropped) ch.auto("policy", "choose_ability", why);
-        return super.getAbilityToPlay(hostCard, offered, triggerEvent);
+        return super.getAbilityToPlay(hostCard, payingAbilities(hostCard, offered), triggerEvent);
+    }
+
+    /**
+     * While a cost is being paid, a source with several mana abilities (a dual land) is asked which one to use. When a
+     * colour still owed can come from no other untapped source, only the abilities that make that colour are offered:
+     * tapping the dual for the colour the basics also make leaves the other colour unpayable and the cast is cancelled
+     * (16/11: Baleful Strix {U}{B} with Islands and one Contaminated Aquifer, cancelled several times a match).
+     */
+    private List<SpellAbility> payingAbilities(Card host, List<SpellAbility> offered) {
+        try {
+            forge.gamemodes.match.input.Input in = getInputQueue().getInput();
+            if (!(in instanceof forge.gamemodes.match.input.InputPayMana) || offered.size() < 2) return offered;
+            for (SpellAbility sa : offered) if (!sa.isManaAbility()) return offered;
+            forge.game.mana.ManaCostBeingPaid owing = InputDriver.owing(in);
+            SpellAbility paidFor = InputDriver.paidFor(in);
+            if (owing == null || paidFor == null) return offered;
+            int needed = 0;
+            for (forge.card.mana.ManaCostShard s : owing.getDistinctShards()) {
+                if (owing.getUnpaidShards(s) <= 0 || s.isGeneric() || s.isPhyrexian()) continue;
+                needed |= s.getShard() & (forge.card.mana.ManaAtom.ALL_MANA_COLORS | forge.card.mana.ManaAtom.COLORLESS);
+            }
+            if (needed == 0) return offered;
+            forge.game.player.Player p = getPlayer();
+            int scarce = 0;
+            for (byte atom : forge.card.mana.ManaAtom.MANATYPES) {
+                if ((needed & atom) == 0) continue;
+                boolean other = false;
+                for (Card c : p.getCardsIn(forge.game.zone.ZoneType.Battlefield)) {
+                    if (c.equals(host) || c.isTapped()) continue;
+                    for (SpellAbility ma : c.getManaAbilities()) { ma.setActivatingPlayer(p); if (ma.isManaAbilityFor(paidFor, atom)) { other = true; break; } }
+                    if (other) break;
+                }
+                if (!other) scarce |= atom;
+            }
+            if (scarce == 0) return offered;
+            List<SpellAbility> keep = new ArrayList<>();
+            for (SpellAbility sa : offered) {
+                sa.setActivatingPlayer(p);
+                for (byte atom : forge.card.mana.ManaAtom.MANATYPES) if ((scarce & atom) != 0 && sa.isManaAbilityFor(paidFor, atom)) { keep.add(sa); break; }
+            }
+            if (keep.isEmpty() || keep.size() == offered.size()) return offered;
+            ch.auto("policy", "choose_ability", "mana ability not offered: a colour still owed can only come from this source");
+            return keep;
+        } catch (RuntimeException e) {
+            return offered; // can't probe it: offer them all
+        }
     }
 
     /**

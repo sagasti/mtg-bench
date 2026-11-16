@@ -1072,7 +1072,7 @@ final class InputDriver implements Observer, Runnable {
     }
 
     /** What a payment input still owes (InputPayMana.manaCost is protected), or null. */
-    private static ManaCostBeingPaid owing(Input in) {
+    static ManaCostBeingPaid owing(Input in) {
         try {
             java.lang.reflect.Field f = InputPayMana.class.getDeclaredField("manaCost");
             f.setAccessible(true);
@@ -1083,7 +1083,7 @@ final class InputDriver implements Observer, Runnable {
     }
 
     /** The spell or ability a payment input pays for (InputPayMana.saPaidFor is protected), or null. */
-    private static SpellAbility paidFor(Input in) {
+    static SpellAbility paidFor(Input in) {
         try {
             java.lang.reflect.Field f = InputPayMana.class.getDeclaredField("saPaidFor");
             f.setAccessible(true);

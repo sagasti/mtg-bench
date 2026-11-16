@@ -140,6 +140,12 @@ export function combatMath(req: DecisionRequest, db: CardDb): string | undefined
  * Pilot patch (combatPolicy strict): attackers that wear an aura, have no first strike / double strike / indestructible /
  * totem armor, and can be blocked by an untapped deathtouch creature: the block kills the creature and every aura on
  * it for one blocker. Returned so the agent can drop those options when the attack is not lethal anyway.
+ *
+ * Two cases are left to the model instead (16/11: against a Thorn of the Black Rose that never taps, the rule froze a
+ * 10/4 trample lifelink creature at home for five turns while a bird army raced it): the block doesn't stop the attack
+ * (trample puts at least 3 and at least half of the power through, and the blocker dies too), or the opponent is
+ * racing us in the air (their flying power kills us in four turns or fewer and we hold no flying or reach blocker),
+ * so waiting for first strike is no longer free.
  */
 export function suicidalAttackers(req: DecisionRequest, db: CardDb): { id: string; name: string; blocker: string; auras: number }[] {
   if (req.phase !== "game" || req.kind !== "attackers") return [];
@@ -152,11 +158,18 @@ export function suicidalAttackers(req: DecisionRequest, db: CardDb): { id: strin
   const total = attackers.reduce((s, a) => s + a.pow, 0);
   if (total >= (st.opponent.life ?? 0)) return [];   // lethal if unblocked: let the model weigh it
   const out: { id: string; name: string; blocker: string; auras: number }[] = [];
+  const theirs = (st.opponent.battlefield ?? []).filter((p) => p.pt).map((p) => fighter(p, db));
+  const airPower = theirs.filter((b) => b.kw.has("flying")).reduce((s, b) => s + Math.max(0, b.pow), 0);
+  const airBlock = mine.map((p) => fighter(p, db)).some((m) => m.kw.has("flying") || m.kw.has("reach"));
+  const raced = airPower > 0 && !airBlock && airPower * 4 >= (st.you.life ?? 0);
   for (const a of attackers) {
     const auras = [...a.text.matchAll(/=Attached: ([^=]+)=/g)].flatMap((m) => m[1].split(",")).length;
     if (!auras || a.kw.has("first strike") || a.kw.has("double strike") || a.kw.has("indestructible") || a.totem) continue;
     const killer = blockers.find((b) => canBlock(a, b) && fight(a, b).aDies);
     if (!killer) continue;
+    if (raced) continue;
+    const f = fight(a, killer);
+    if (f.bDies && f.through >= 3 && f.through * 2 >= a.pow) continue;
     const opt = req.options.find((o) => o.id === a.p.id || (a.p.id && o.id.startsWith(a.p.id)));
     if (opt) out.push({ id: opt.id, name: a.name, blocker: killer.name, auras });
   }
