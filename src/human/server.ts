@@ -53,8 +53,9 @@ export class HumanWebServer {
     humanHooks.gameStart = (i) => { this.peekData = null; this.peekKey = ""; this.broadcast("game", { event: "start", ...i }); };
     humanHooks.gameEnd = (i) => this.broadcast("game", { event: "end", ...i });
     humanHooks.matchEnd = (i) => this.broadcast("over", i);
-    // Off unless the run asked for it: without the hook the other seat's states never reach this server.
-    humanHooks.opponentView = opts.peek ? (i) => this.peek(i.state) : undefined;
+    // Every decision of the other seat: its public part goes to the page as a "table" step, so the person sees each move as
+    // it happens instead of all of them at their next decision. Its hand goes too only in analysis mode (peek).
+    humanHooks.opponentView = (i) => { if (opts.peek) this.peek(i.state); this.table(i.state); };
   }
 
   get url() { return `http://localhost:${this.opts.port}/?t=${this.token}`; }
@@ -132,8 +133,33 @@ export class HumanWebServer {
     }
   }
 
+  /**
+   * The table as it stands while the other seat decides, turned around to this seat's point of view and cut down to what
+   * is public: no hand of the other seat (only its size), no exile of the other seat (it can hold face-down cards that only
+   * its owner may see) and no hand of this seat (the other seat's view doesn't have it); the page keeps what it had for those.
+   */
+  private tableKey = "";
+  private table(state: any) {
+    try {
+      if (!state?.you || !state?.opponent) return;
+      const swap = (v: any): any => v === "you" ? "opponent" : v === "opponent" ? "you" : Array.isArray(v) ? v.map(swap)
+        : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, swap(x)])) : v;
+      const s = swap(state);
+      const { hand, exile: _exile, landsPlayedThisTurn: _l, manaPool: _m, ...rival } = s.you;
+      const faceDown = (c: any) => (c?.faceDown ? { id: c.id, name: "face-down card", ...(c.tapped ? { tapped: true } : {}) } : c);
+      const view = { game: s.game, turn: s.turn, phase: s.phase, activePlayer: s.activePlayer, stack: s.stack, combat: s.combat, recentLog: s.recentLog,
+        you: s.opponent, opponent: { ...rival, handSize: Array.isArray(hand) ? hand.length : undefined, battlefield: (rival.battlefield ?? []).map(faceDown) } };
+      const key = JSON.stringify(view);
+      if (key === this.tableKey) return; // several decisions in a row on the same table
+      this.tableKey = key;
+      this.broadcast("table", { state: view, cards: this.cardInfo(view) });
+    } catch (e: any) {
+      info(`human seat "${this.opts.seatId}": table step skipped (${e?.message ?? e})`); // a side view never breaks a decision
+    }
+  }
+
   private broadcast(type: string, data: unknown) {
-    if (type !== "peek") this.lastEvent = { type, data }; // a peek is a side note: it never says where the table stands
+    if (type !== "peek" && type !== "table") this.lastEvent = { type, data }; // a peek is a side note: it never says where the table stands
     if (type === "game" || type === "over") this.history.push({ type, data });
     this.recent.push({ seq: ++this.seq, type, data });
     if (this.recent.length > 100) this.recent.shift();

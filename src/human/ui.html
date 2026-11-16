@@ -113,20 +113,59 @@ let auto = null;          // auto-pass armed: { armedTurn } -> pass empty-stack 
 let peek = null;          // analysis mode: the rival's hand as it stood at its latest decision ({ hand, turn, phase, cards })
 let oppHandNow = null;    // …and how many cards it holds in the latest state we were shown since (the peek can lag behind)
 
+// Every move is shown: tasks run one after another, and a state that brings new lines of the game log reveals them one at
+// a time (the rival's, with a pause each) before the next thing happens on the page.
+const queue = []; let draining = false;
+function enqueue(task) { queue.push(task); if (!draining) drain(); }
+async function drain() { draining = true; while (queue.length) { try { await queue.shift()(); } catch (e) { console.error(e); } } draining = false; }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let sending = null, gameNo = null, connectedAt = Date.now();
+let lastState = null, shownLog = null;   // shownLog null: nothing shown yet on this page (don't replay the log we arrived to)
+/** How many lines at the end of `now` are new, given the lines shown so far (the log is a window of the latest ones). */
+function newLines(old, now) {
+  if (!old) return 0;
+  if (!old.length) return now.length;
+  for (let n = 0; n <= now.length; n++) { const k = Math.min(old.length, now.length - n); if (k > 0 && old.slice(-k).join("\n") === now.slice(now.length - n - k, now.length - n).join("\n")) return n; }
+  return now.length;
+}
+async function present(st, info) {
+  if (!st) return;
+  if (lastState) {   // a "table" step has no hand of ours and no exile of the rival: keep what we had
+    if (st.you && st.you.hand === undefined) st.you.hand = (lastState.you || {}).hand;
+    if (st.opponent && st.opponent.exile === undefined) st.opponent.exile = (lastState.opponent || {}).exile;
+    if (!st.youAre) st.youAre = lastState.youAre;
+  }
+  Object.assign(cards, info || {});
+  const lines = st.recentLog || [], n = newLines(shownLog, lines), mine = (l) => !!st.youAre && l.startsWith(st.youAre);
+  const rivals = lines.slice(lines.length - n).filter((l) => !mine(l)).length, ms = rivals > 6 ? 450 : 900;
+  lastState = st;
+  for (let i = lines.length - n; i < lines.length && rivals; i++) {
+    renderState(st, i + 1);
+    if (!mine(lines[i])) { clearOpts(); $("decision").className = "idle"; $("prompt").textContent = `▶ ${lines[i]}`; setStatus("El rival juega…"); await sleep(ms); }
+  }
+  renderState(st);
+  shownLog = lines;
+}
+
 function esc(s) { return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 
 // The server's events, however they arrive (the SSE stream, or long polls when a proxy holds the stream back).
 const onEvent = {
-  hello: (d) => { $("title").textContent = `mtg-rival · ${d.label}`; setStatus("conectado, esperando…"); if (d.peek) { $("peekZone").style.display = ""; renderPeek(); } },
+  hello: (d) => { connectedAt = Date.now(); $("title").textContent = `mtg-rival · ${d.label}`; setStatus("conectado, esperando…"); if (d.peek) { $("peekZone").style.display = ""; renderPeek(); } },
   peek: (d) => { peek = d; oppHandNow = null; renderPeek(); },
-  decision: (d) => showDecision(d),
-  waiting: (d) => { if (!cur || !d.answered || cur.rid === d.answered) { cur = null; idle(auto ? "Pasando hasta tu turno…" : "El rival está jugando…"); } },
-  game: (d) => {
+  decision: (d) => enqueue(async () => { if (d.rid === lastAnswered || (cur && cur.rid === d.rid)) return; await present(d.state, d.cards); showDecision(d); }),
+  table: (d) => enqueue(async () => { if (!cur || cur.rid === sending) await present(d.state, d.cards); }),
+  waiting: (d) => enqueue(() => { if (!cur || !d.answered || cur.rid === d.answered) { cur = null; idle(auto ? "Pasando hasta tu turno…" : "El rival está jugando…"); } }),
+  game: (d) => { const replayed = Date.now() - connectedAt < 1500; enqueue(() => onGame(d, replayed)); },   // right after a hello: history
+  over: (d) => enqueue(() => onOver(d)),
+};
+const onGame = (d, replayed) => {
+    // A new game starts with an empty log, and all of it is new; the same event replayed on (re)connecting is history.
+    if (d.event === "start" && d.game !== gameNo) { gameNo = d.game; lastState = null; shownLog = replayed ? null : []; }
     if (d.event === "start") { $("game").textContent = `Partida ${d.game}${d.onThePlay !== undefined ? (d.youPlay ? " · salís vos" : " · sale el rival") : ""}`; $("overlay").classList.remove("show"); peek = null; oppHandNow = null; renderPeek(); }
     if (d.event === "end") { $("overlay").innerHTML = d.youWon ? "🎉 Ganaste la partida" : d.youWon === false ? "Perdiste la partida" : "Empate"; $("overlay").innerHTML += `<div class="small" style="font-size:16px;margin-top:10px">${esc(d.reason || "")} · turno ${esc(d.turns ?? "?")}</div><div style="margin-top:18px;font-size:16px"><a href="/" style="color:var(--acc)">Volver al lobby</a></div>`; $("overlay").classList.add("show"); }
-  },
-  over: (d) => { idle("Match terminado"); $("overlay").innerHTML = `Match terminado: ${esc(d.summary || "")}<div style="margin-top:18px;font-size:16px"><a href="/" style="color:var(--acc)">Volver al lobby</a></div>`; $("overlay").classList.add("show"); },
 };
+const onOver = (d) => { idle("Match terminado"); $("overlay").innerHTML = `Match terminado: ${esc(d.summary || "")}<div style="margin-top:18px;font-size:16px"><a href="/" style="color:var(--acc)">Volver al lobby</a></div>`; $("overlay").classList.add("show"); };
 function connect() {
   const es = new EventSource(`/events?t=${encodeURIComponent(token)}`);
   let heard = false;
@@ -218,12 +257,16 @@ function updateButtons() {
 async function submit() {
   if (!cur) return;
   const rid = cur.rid, body = { rid, choice: [...selected] };
+  sending = rid;   // until the server answers, this decision still looks open; what arrives meanwhile is already the next thing
   const r = await fetch(`/answer?t=${encodeURIComponent(token)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  if (sending === rid) sending = null;
   if (!r.ok) { const e = await r.json().catch(() => ({ error: r.statusText })); if (cur && cur.rid === rid) $("err").textContent = e.error || "error"; return; }
   lastAnswered = rid;
   // The next decision may have arrived over SSE while the POST was in flight: never wipe it.
-  if (cur && cur.rid === rid) { cur = null; idle(auto ? "Pasando hasta tu turno…" : "Enviado. El rival está jugando…"); }
+  // …and a move of the rival may already be on show (its step arrived first): then only put the answered buttons away.
+  if (cur && cur.rid === rid) { cur = null; if (draining) clearOpts(); else idle(auto ? "Pasando hasta tu turno…" : "Enviado. El rival está jugando…"); }
 }
+function clearOpts() { $("opts").innerHTML = ""; $("go").style.display = "none"; $("hint").textContent = ""; $("err").textContent = ""; }
 // The game process is gone (abandoned from the lobby, crashed, or finished and closed): say so instead of a frozen table.
 let goneStrikes = 0;
 async function checkGone() {
@@ -233,7 +276,7 @@ async function checkGone() {
 // Belt and braces: if we think nothing is pending but the server does (a missed event), pick it up.
 setInterval(async () => {
   // Also while a decision is pending: if the game process died underneath us, /pending stops answering and we say so.
-  try { const r = await fetch(`/pending?t=${encodeURIComponent(token)}`); if (!r.ok) { if (r.status === 502 || r.status === 404) { goneStrikes++; if (goneStrikes >= 2) checkGone(); } return; } goneStrikes = 0; if (cur) return; const d = await r.json(); if (d && d.rid && d.rid !== lastAnswered) showDecision(d); } catch {}
+  try { const r = await fetch(`/pending?t=${encodeURIComponent(token)}`); if (!r.ok) { if (r.status === 502 || r.status === 404) { goneStrikes++; if (goneStrikes >= 2) checkGone(); } return; } goneStrikes = 0; if (cur || draining) return; const d = await r.json(); if (d && d.rid && d.rid !== lastAnswered) onEvent.decision(d); } catch {}   // through the queue: never over a move on show
 }, 4000);
 
 function cardEl(c, zone) {
@@ -274,7 +317,7 @@ function peekNote() {
   const moved = oppHandNow !== null && oppHandNow !== n ? ` · ahora tiene ${oppHandNow}: se actualiza cuando vuelva a decidir` : "";
   $("peekNote").textContent = `${n} carta${n === 1 ? "" : "s"}, como la tenía en su última decisión (${when})${moved}`;
 }
-function renderState(st) {
+function renderState(st, upto) {
   if (!st) return;
   const ph = st.phase && st.phase !== "null" ? st.phase : "—";
   $("turn").textContent = `Turno ${st.turn ?? "?"} · ${ph} · juega ${st.activePlayer === "you" ? "vos" : "el rival"}`;
@@ -293,7 +336,7 @@ function renderState(st) {
   const stack = st.stack || [];
   $("stackZone").style.display = stack.length ? "" : "none";
   $("stack").innerHTML = stack.map((s) => `<div>${esc(s.controller === "you" ? "vos" : "rival")}: <b>${esc(s.source || "")}</b> — ${esc(s.description || "")}</div>`).reverse().join("");
-  const log = $("log"); const lines = st.recentLog || [];
+  const log = $("log"); const lines = (st.recentLog || []).slice(0, upto ?? undefined);
   log.innerHTML = lines.map((l) => `<div class="${/^P\d/.test(l) && st.youAre && l.startsWith(st.youAre) ? "me" : ""}">${esc(l)}</div>`).join("");
   log.scrollTop = log.scrollHeight;
 }
