@@ -11,6 +11,7 @@ import { mulliganMath } from "../knowledge/mulligan.ts";
 import { gamePlan } from "../knowledge/plans.ts";
 import { combatMath } from "../knowledge/combat.ts";
 import { openMana } from "../knowledge/interaction.ts";
+import { manaColours } from "../knowledge/mana.ts";
 
 const CARD_KEYS = new Set(["name", "card", "cards", "picks", "pool", "pack", "seen", "hand", "deck", "graveyard", "exile", "source"]);
 
@@ -66,7 +67,15 @@ export function renderRequest(req: DecisionRequest, event: EventConfig, db: Card
     const o = openMana(req, db, event.plansFile);
     if (o) parts.push(o);
   }
-  const optLines = req.options.map((o) => `- [${o.id}] ${o.label}`);
+  if (event.manaPolicy) {
+    // Pilot patch: the colours the seat's list needs against the ones its battlefield makes (mana Aura colour, land search, stuck hand).
+    const mc = manaColours(req, db, event.plansFile);
+    if (mc) parts.push(mc);
+  }
+  // Pilot patch: a two-button colour question keeps the ids of its buttons ("ok"/"cancel"); the model read "cancel" as
+  // cancelling the cast and never picked the second colour.
+  const buttons = !!event.manaPolicy && req.kind === "choose_color" && req.options.every((o) => /^Button: (?:White|Blue|Black|Red|Green)$/.test(o.label));
+  const optLines = req.options.map((o) => `- [${o.id}] ${buttons ? `${o.label.slice(8)} (this button picks ${o.label.slice(8).toLowerCase()}; "${o.id}" is only its name, nothing is confirmed or cancelled)` : o.label}`);
   parts.push(`## Options\n${optLines.join("\n")}`);
   const how = req.min === req.max
     ? `Choose exactly ${req.min} option${req.min === 1 ? "" : "s"}.`

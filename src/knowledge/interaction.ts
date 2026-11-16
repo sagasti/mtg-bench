@@ -36,7 +36,7 @@ const payable = (cost: { mana: number; pips: Record<string, number> }, m: Mana) 
 const colorsText = (m: Mana) => Object.entries(m.byColor).filter(([c]) => c !== "C").map(([c, k]) => c.repeat(k)).join(" ") || (m.total ? "colorless only" : "");
 
 /** "4 Baleful Strix" lines of the [main] section of a Forge .dck file. */
-function readDeck(file: string): Map<string, number> {
+export function readDeck(file: string): Map<string, number> {
   const counts = new Map<string, number>();
   let section = "main";
   for (const raw of fs.readFileSync(file, "utf8").split("\n")) {

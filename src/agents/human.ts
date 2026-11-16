@@ -17,7 +17,8 @@ export class WebHumanAgent implements DecisionAgent {
   constructor(sc: SeatConfig, db: CardDb, runDir: string) {
     if (shared) throw new Error("only one human seat per run");
     this.timeoutMs = sc.decisionTimeoutSec ? sc.decisionTimeoutSec * 1000 : undefined;
-    shared = this.server = new HumanWebServer({ port: sc.webPort ?? 8787, token: sc.webToken, cacheDir: `${runDir}/../.imgcache`, db, seatId: sc.id, label: sc.label });
+    // MTG_HUMAN_PEEK=1 (the lobby sets it for a game started in analysis mode): the player also sees the other seat's hand.
+    shared = this.server = new HumanWebServer({ port: sc.webPort ?? 8787, token: sc.webToken, cacheDir: `${runDir}/../.imgcache`, db, seatId: sc.id, label: sc.label, peek: process.env.MTG_HUMAN_PEEK === "1" });
     this.started = this.server.start();
   }
   async decide(req: DecisionRequest, ctx: DecideContext): Promise<AgentResult> {

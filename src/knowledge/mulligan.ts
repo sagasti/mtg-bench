@@ -56,7 +56,9 @@ export function mulliganMath(req: DecisionRequest, db: CardDb): string | undefin
     const keepLands = Math.min(lands.length, hand.length - n <= 5 ? 3 : 4);
     const sugg: string[] = [];
     let surplusLands = lands.length - keepLands;
-    const byCost = [...spells].sort((a, b) => cmc(b) - cmc(a));
+    // The only cheap creature in hand is never the suggested bottom while another spell can go instead.
+    const lone = loneCreature(spells, cmc);
+    const byCost = [...spells].sort((a, b) => cmc(b) - cmc(a)).filter((c) => c !== lone || spells.length - 1 < n);
     let need = n;
     while (need > 0 && surplusLands > 0) { sugg.push(lands[lands.length - surplusLands].name); surplusLands--; need--; }
     for (const c of byCost) { if (need <= 0) break; sugg.push(`${c.name} (${cmc(c)})`); need--; }
@@ -106,6 +108,53 @@ export function mulliganMath(req: DecisionRequest, db: CardDb): string | undefin
   verdicts.set(req.requestId, { verdict, why, action: verdict.startsWith("MULLIGAN") ? "mulligan" : "keep", binding });
   lines.push(`Rule of thumb in Pauper: on 7 keep 2-4 lands with something to cast by turn 2; on 6 keep 2-4 lands; on 5 keep almost anything with a land. One-land hands need a second source or two one-mana cantrips, and are kept more readily on the draw.`);
   return lines.join("\n");
+}
+
+function loneCreature<T extends HandCard>(spells: T[], cmc: (c: T) => number): T | undefined {
+  const creatures = spells.filter((c) => c.pt);
+  return creatures.length === 1 && cmc(creatures[0]) <= 2 ? creatures[0] : undefined;
+}
+
+/**
+ * Pilot patch (event.bottomPolicy strict): the cards a London-mulligan bottom may not take, removed from the options
+ * before the model is asked. Only arithmetic cases: with the same prompt the model bottomed a Forest from a three-land
+ * six-card keep in two runs out of four (h2h-5, seed 101) and a land from a two-land four-card keep.
+ *  - lands: keep at least 3 (2 when keeping five or fewer) or all of them; lands beyond that floor may go, the most
+ *    duplicated names first, so the single Plains of a green-white hand is never the one offered;
+ *  - flood: when the lands above 4 (3 when keeping five or fewer) cover the whole bottom, only lands are offered;
+ *  - the only creature costing 2 or less stays while enough other cards can go.
+ */
+export interface BottomPolicy { drop: string[]; why: string }
+export function londonBottomPolicy(req: DecisionRequest, db: CardDb): BottomPolicy | undefined {
+  if (req.kind !== "london_bottom") return undefined;
+  const hand: HandCard[] = (req.state as any)?.you?.hand ?? [];
+  const n = req.min;
+  if (!hand.length || n <= 0 || req.max !== n) return undefined;
+  const byId = new Map(hand.filter((c) => c.id).map((c) => [c.id!, c]));
+  const opts = req.options.filter((o) => byId.has(o.id));
+  if (opts.length !== req.options.length || opts.length !== hand.length) return undefined;
+  const keep = hand.length - n;
+  const land = (id: string) => isLand(byId.get(id)!, db);
+  const landIds = opts.filter((o) => land(o.id)).map((o) => o.id);
+  const spellIds = opts.filter((o) => !land(o.id)).map((o) => o.id);
+  const floor = Math.min(landIds.length, keep >= 6 ? 3 : 2), ceiling = keep >= 6 ? 4 : 3;
+  const drop = new Set<string>(); const why: string[] = [];
+  if (landIds.length - ceiling >= n) {
+    for (const id of spellIds) drop.add(id);
+    why.push(`${landIds.length} lands for a ${keep}-card keep: the bottom is ${n === 1 ? "a land" : "lands"}`);
+  } else {
+    const spare = landIds.length - floor;
+    if (spare < landIds.length && spellIds.length >= n - spare) {
+      const count = (id: string) => landIds.filter((x) => byId.get(x)!.name === byId.get(id)!.name).length;
+      const offered = new Set([...landIds].sort((a, b) => count(b) - count(a)).slice(0, spare));
+      for (const id of landIds) if (!offered.has(id)) drop.add(id);
+      why.push(spare ? `keeping ${floor} of ${landIds.length} lands: at most ${spare} land${spare === 1 ? "" : "s"} offered` : `${landIds.length} land${landIds.length === 1 ? "" : "s"} for a ${keep}-card keep: no land goes to the bottom`);
+    }
+    const lone = loneCreature(spellIds.map((id) => byId.get(id)!), (c) => getCard(db, c.name)?.cmc ?? 0);
+    if (lone?.id && opts.length - drop.size - 1 >= n) { drop.add(lone.id); why.push(`${lone.name} is the only creature in hand`); }
+  }
+  if (!drop.size || opts.length - drop.size < n) return undefined;
+  return { drop: [...drop], why: why.join("; ") };
 }
 
 /** P(exactly k successes in n draws) from a population of N with K successes. */

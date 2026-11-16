@@ -9,9 +9,10 @@ import type { AgentResult, CallObserver, DecisionAgent } from "./agent.ts";
 import { type ChatMessage, type CompleteArgs, DecisionClock, type FailureDetail, type ModelTurn, type Provider, ProviderError } from "./providers/types.ts";
 import { info, type Jsonl } from "../util/log.ts";
 import { hasPrompt, renderRequest, renderTemplate, systemPrompt } from "./render.ts";
-import { mulliganVerdict } from "../knowledge/mulligan.ts";
-import { lethalBlocks, suicidalAttackers } from "../knowledge/combat.ts";
+import { londonBottomPolicy, mulliganVerdict } from "../knowledge/mulligan.ts";
+import { lethalBlocks, suicidalAttackers, trampleAssignment } from "../knowledge/combat.ts";
 import { castingPlan } from "../knowledge/interaction.ts";
+import { manaChoice } from "../knowledge/mana.ts";
 import { deckKey, deckStats, renderDeckStats } from "../deckbuild/stats.ts";
 
 export class LlmAgent implements DecisionAgent {
@@ -55,9 +56,6 @@ export class LlmAgent implements DecisionAgent {
     const clock = new DecisionClock(this.event.decisionTimeoutSec * 1000);
     let usage: TokenUsage = { ...ZERO_USAGE };
     const toolCalls: Record<string, number> = {};
-    if (auraPolicy) toolCalls.aura_policy = auraPolicy;
-    if (combatPolicy) toolCalls.combat_policy = combatPolicy;
-    if (sequencePolicy) toolCalls.sequence_policy = sequencePolicy;
     let modelCalls = 0, truncated = 0;
     let specViolation: string | undefined;
     const result = (notes: string | null, extra: Partial<MatchNotesResult> = {}): MatchNotesResult =>
@@ -154,6 +152,18 @@ export class LlmAgent implements DecisionAgent {
         return { response: { choice: [opt.id], rationale: `mulligan policy (${v.verdict}): ${v.why}` }, usage: ZERO_USAGE, modelCalls: 0, toolCalls: { mulligan_policy: 1 }, invalidAttempts: 0 };
       }
     }
+    // Pilot patch: a London-mulligan bottom never takes a land the hand needs nor its only cheap creature (same prompt,
+    // the model bottomed a Forest from a three-land keep in two runs out of four). Options are narrowed, the model picks.
+    let bottomPolicy = 0;
+    if (this.event.bottomPolicy === "strict" && req.kind === "london_bottom") {
+      const bp = londonBottomPolicy(req, this.db);
+      if (bp) {
+        const ids = new Set(bp.drop);
+        req = { ...req, options: req.options.filter((o) => !ids.has(o.id)) };
+        bottomPolicy = bp.drop.length;
+        info(`[${this.seat.id}] bottom policy: ${bp.why}`);
+      }
+    }
     // Pilot patch: a buff Aura this seat casts never goes on a token or a non-hexproof creature while a hexproof creature
     // of ours is a legal target (it eats their removal and the aura goes with it). The options are narrowed before rendering.
     let auraPolicy = 0;
@@ -204,6 +214,30 @@ export class LlmAgent implements DecisionAgent {
         return { response: { choice: lb.ids, rationale: `block policy: ${lb.why}` }, usage: ZERO_USAGE, modelCalls: 0, toolCalls: { block_policy: 1 }, invalidAttempts: 0 };
       }
     }
+    // Pilot patch: a trampler's damage split is arithmetic (the model overkilled a chump blocker and missed exact lethal).
+    if (this.event.assignPolicy === "strict" && req.kind === "assign_damage") {
+      const a = trampleAssignment(req);
+      if (a) {
+        info(`[${this.seat.id}] assign policy: ${a.why}`);
+        return { response: { choice: [a.id], rationale: `assign policy: ${a.why}` }, usage: ZERO_USAGE, modelCalls: 0, toolCalls: { assign_policy: 1 }, invalidAttempts: 0 };
+      }
+    }
+    // Pilot patch: the colour a mana Aura names and the basic a land search fetches follow the colours the list needs
+    // (the model named green for Utopia Sprawl in a green-white list and never cast its white Auras).
+    let manaPolicy = 0;
+    if (this.event.manaPolicy === "strict") {
+      const mc = manaChoice(req, this.db, this.event.plansFile);
+      if (mc?.choice) {
+        info(`[${this.seat.id}] mana policy: ${mc.choice.why}`);
+        return { response: { choice: [mc.choice.id], rationale: `mana policy: ${mc.choice.why}` }, usage: ZERO_USAGE, modelCalls: 0, toolCalls: { mana_policy: 1 }, invalidAttempts: 0 };
+      }
+      if (mc?.keep) {
+        const keep = new Set(mc.keep);
+        req = { ...req, options: req.options.filter((o) => keep.has(o.id)) };
+        manaPolicy = mc.dropped?.length ?? 1;
+        info(`[${this.seat.id}] mana policy: not offering ${mc.dropped?.join(", ")} (no card of the list uses it)`);
+      }
+    }
     // Pilot patch: no cantrip/ramp before the spell that matters while that would leave it exposed to a live tax counter.
     let sequencePolicy = 0;
     if (this.event.sequencePolicy === "strict" && this.event.openMana && req.kind === "priority") {
@@ -224,6 +258,11 @@ export class LlmAgent implements DecisionAgent {
     let clock = new DecisionClock(this.event.decisionTimeoutSec * 1000);
     let usage: TokenUsage = { ...ZERO_USAGE };
     const toolCalls: Record<string, number> = {};
+    if (auraPolicy) toolCalls.aura_policy = auraPolicy;
+    if (combatPolicy) toolCalls.combat_policy = combatPolicy;
+    if (sequencePolicy) toolCalls.sequence_policy = sequencePolicy;
+    if (manaPolicy) toolCalls.mana_policy = manaPolicy;
+    if (bottomPolicy) toolCalls.bottom_policy = bottomPolicy;
     let knowledgeCalls = 0;
     let invalidAttempts = 0;
     let modelCalls = 0, truncated = 0;

@@ -127,6 +127,8 @@ export class ForgeEngine implements GameEngine {
             case "decision": {
               const seatIdx = msg.seat as 0 | 1;
               decisions[seatIdx]++;
+              // Pilot patch: the web table's analysis mode (the hook is unset otherwise) shows the person what the other seat holds.
+              if (hi >= 0 && seatIdx !== hi) humanHooks.opponentView?.({ state: msg.state });
               const req: DecisionRequest = {
                 requestId: `${spec.matchId}-g${msg.game ?? current?.game ?? 0}-${msg.rid}`,
                 phase: "game", kind: msg.kind as DecisionKind, prompt: msg.prompt, state: msg.state,

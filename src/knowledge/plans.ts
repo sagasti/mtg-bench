@@ -64,6 +64,21 @@ export function opponentArchetype(req: DecisionRequest, file: string): { slug: s
   return { slug: opp.slug, name: a.name, hits: opp.hits, deckFile: deckFile && fs.existsSync(deckFile) ? deckFile : undefined };
 }
 
+/** The seat's own archetype (from its hand, battlefield, graveyard and exile) with its known decklist path. */
+export function ownArchetype(req: DecisionRequest, file: string): { slug: string; name: string; hits: string[]; deckFile?: string } | undefined {
+  let plans: Plans;
+  try { plans = loadPlans(file); } catch { return undefined; }
+  const st = req.state as any;
+  const nameOf = (x: any) => (typeof x === "string" ? x : x?.name) as string | undefined;
+  const mine = new Set<string>();
+  for (const z of ["hand", "battlefield", "graveyard", "exile"]) for (const c of st?.you?.[z] ?? []) { const n = nameOf(c); if (n) mine.add(n); }
+  const ours = identify(mine, plans.archetypes);
+  if (!ours) return undefined;
+  const a = plans.archetypes[ours.slug];
+  const deckFile = a.deck ? path.resolve(path.dirname(file), a.deck) : undefined;
+  return { slug: ours.slug, name: a.name, hits: ours.hits, deckFile: deckFile && fs.existsSync(deckFile) ? deckFile : undefined };
+}
+
 export function gamePlan(req: DecisionRequest, file: string, _db: CardDb): string | undefined {
   let plans: Plans;
   try { plans = loadPlans(file); } catch { return undefined; }

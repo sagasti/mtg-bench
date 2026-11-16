@@ -16,6 +16,12 @@
   .zone { border:1px solid var(--line); border-radius:8px; background:var(--panel); padding:8px 10px; margin-bottom:10px; }
   .zone h3 { margin:0 0 6px; font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); display:flex; gap:14px; align-items:baseline; }
   .zone h3 .life { color:var(--txt); font-size:18px; text-transform:none; letter-spacing:0; }
+  .zone h3 .note { text-transform:none; letter-spacing:0; }
+  .zone.peek { border-style:dashed; border-color:#6b4f1d; }
+  .zone.peek .card, .zone.peek .card img, .zone.peek .card .ph { width:90px; }
+  .zone.peek .card img, .zone.peek .card .ph { height:126px; }
+  .zone.peek .card .ph { font-size:9px; }
+  .zone.peek .card .tip { left:94px; }
   .cards { display:flex; flex-wrap:wrap; gap:8px; min-height:40px; align-items:flex-start; }
   .card { position:relative; width:120px; cursor:default; transition:transform .15s; }
   .card img { width:120px; height:168px; border-radius:6px; display:block; background:#222; object-fit:cover; }
@@ -54,7 +60,7 @@
   #overlay { position:fixed; inset:0; background:#000c; display:none; flex-direction:column; align-items:center; justify-content:center; z-index:50; font-size:28px; text-align:center; padding:30px; }
   #overlay.show { display:flex; }
   dialog { background:var(--panel); color:var(--txt); border:1px solid var(--line); border-radius:8px; max-width:640px; }
-  @media (max-width: 900px) { main { grid-template-columns: 1fr; padding-bottom: 260px; } .card, .card img, .card .ph { width:84px; } .card img, .card .ph { height:118px; } .card .ph { font-size:9px; } .card.tapped { transform:rotate(90deg) translateY(-17px); margin:0 17px; } }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; padding-bottom: 260px; } .card, .card img, .card .ph { width:84px; } .card img, .card .ph { height:118px; } .card .ph { font-size:9px; } .card.tapped { transform:rotate(90deg) translateY(-17px); margin:0 17px; } .zone.peek .card, .zone.peek .card img, .zone.peek .card .ph { width:72px; } .zone.peek .card img, .zone.peek .card .ph { height:101px; } .zone.peek .card .tip { left:76px; } }
 </style>
 </head>
 <body>
@@ -66,6 +72,10 @@
 </header>
 <main>
   <section>
+    <div class="zone peek" id="peekZone" style="display:none">
+      <h3>Mano del rival · modo análisis <span class="small note" id="peekNote"></span></h3>
+      <div class="cards" id="peekHand"></div>
+    </div>
     <div class="zone" id="oppZone">
       <h3>Rival <span class="life" id="oppLife">20</span> <span id="oppCounts" class="small"></span></h3>
       <div class="cards" id="oppBf"></div>
@@ -97,21 +107,47 @@ let cards = {};          // name -> oracle info (from the last decision)
 let lastLogLen = 0;
 let lastAnswered = null;  // rid of the last decision we answered (the server may already have sent the next one)
 let auto = null;          // auto-pass armed: { armedTurn } -> pass empty-stack priorities until our next MAIN1 or anything else happens
+let peek = null;          // analysis mode: the rival's hand as it stood at its latest decision ({ hand, turn, phase, cards })
+let oppHandNow = null;    // …and how many cards it holds in the latest state we were shown since (the peek can lag behind)
 
 function esc(s) { return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 
+// The server's events, however they arrive (the SSE stream, or long polls when a proxy holds the stream back).
+const onEvent = {
+  hello: (d) => { $("title").textContent = `mtg-rival · ${d.label}`; setStatus("conectado, esperando…"); if (d.peek) { $("peekZone").style.display = ""; renderPeek(); } },
+  peek: (d) => { peek = d; oppHandNow = null; renderPeek(); },
+  decision: (d) => showDecision(d),
+  waiting: (d) => { if (!cur || !d.answered || cur.rid === d.answered) { cur = null; idle(auto ? "Pasando hasta tu turno…" : "El rival está jugando…"); } },
+  game: (d) => {
+    if (d.event === "start") { $("game").textContent = `Partida ${d.game}${d.onThePlay !== undefined ? (d.youPlay ? " · salís vos" : " · sale el rival") : ""}`; $("overlay").classList.remove("show"); peek = null; oppHandNow = null; renderPeek(); }
+    if (d.event === "end") { $("overlay").innerHTML = d.youWon ? "🎉 Ganaste la partida" : d.youWon === false ? "Perdiste la partida" : "Empate"; $("overlay").innerHTML += `<div class="small" style="font-size:16px;margin-top:10px">${esc(d.reason || "")} · turno ${esc(d.turns ?? "?")}</div><div style="margin-top:18px;font-size:16px"><a href="/" style="color:var(--acc)">Volver al lobby</a></div>`; $("overlay").classList.add("show"); }
+  },
+  over: (d) => { idle("Match terminado"); $("overlay").innerHTML = `Match terminado: ${esc(d.summary || "")}<div style="margin-top:18px;font-size:16px"><a href="/" style="color:var(--acc)">Volver al lobby</a></div>`; $("overlay").classList.add("show"); },
+};
 function connect() {
   const es = new EventSource(`/events?t=${encodeURIComponent(token)}`);
-  es.addEventListener("hello", (e) => { const d = JSON.parse(e.data); $("title").textContent = `mtg-rival · ${d.label}`; setStatus("conectado, esperando…"); });
-  es.addEventListener("decision", (e) => showDecision(JSON.parse(e.data)));
-  es.addEventListener("waiting", (e) => { const d = JSON.parse(e.data || "{}"); if (!cur || !d.answered || cur.rid === d.answered) { cur = null; idle(auto ? "Pasando hasta tu turno…" : "El rival está jugando…"); } });
-  es.addEventListener("game", (e) => {
-    const d = JSON.parse(e.data);
-    if (d.event === "start") { $("game").textContent = `Partida ${d.game}${d.onThePlay !== undefined ? (d.youPlay ? " · salís vos" : " · sale el rival") : ""}`; $("overlay").classList.remove("show"); }
-    if (d.event === "end") { $("overlay").innerHTML = d.youWon ? "🎉 Ganaste la partida" : d.youWon === false ? "Perdiste la partida" : "Empate"; $("overlay").innerHTML += `<div class="small" style="font-size:16px;margin-top:10px">${esc(d.reason || "")} · turno ${esc(d.turns ?? "?")}</div><div style="margin-top:18px;font-size:16px"><a href="/" style="color:var(--acc)">Volver al lobby</a></div>`; $("overlay").classList.add("show"); }
-  });
-  es.addEventListener("over", (e) => { const d = JSON.parse(e.data); idle("Match terminado"); $("overlay").innerHTML = `Match terminado: ${esc(d.summary || "")}<div style="margin-top:18px;font-size:16px"><a href="/" style="color:var(--acc)">Volver al lobby</a></div>`; $("overlay").classList.add("show"); });
+  let heard = false;
+  for (const [type, fn] of Object.entries(onEvent)) es.addEventListener(type, (e) => { heard = true; fn(JSON.parse(e.data || "{}")); });
   es.onerror = () => { setStatus("desconectado, reintentando…"); checkGone(); };
+  // The server says hello at once. Nothing after a few seconds: something in between is holding the stream back (a
+  // Cloudflare quick tunnel does, for ever), and the table would sit on "esperando". Same events, by long polling.
+  setTimeout(() => { if (!heard) { es.close(); poll(); } }, 2500);
+}
+async function poll() {
+  document.documentElement.dataset.transport = "poll";
+  let since = -1, fails = 0;
+  for (;;) {
+    try {
+      const r = await fetch(`/poll?t=${encodeURIComponent(token)}&since=${since}`, { cache: "no-store" });
+      if (!r.ok) throw new Error(String(r.status));
+      const j = await r.json();
+      since = j.seq; fails = 0;
+      for (const e of j.events) onEvent[e.type]?.(e.data ?? {});
+    } catch {
+      if (++fails >= 2) { setStatus("desconectado, reintentando…"); await checkGone(); if (goneStrikes >= 2) return; }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
 }
 function setStatus(s, me) { const el = $("status"); el.textContent = s; el.className = "st" + (me ? " me" : ""); }
 function idle(msg) { $("decision").className = "idle"; $("prompt").textContent = msg; $("opts").innerHTML = ""; $("go").style.display = "none"; $("hint").textContent = ""; $("err").textContent = ""; setStatus(msg); }
@@ -193,7 +229,7 @@ function cardEl(c, zone) {
   const el = document.createElement("div");
   el.className = "card" + (c.tapped ? " tapped" : "") + (c.attacking ? " attacking" : "");
   const name = c.name || c;
-  const info = cards[name] || {};
+  const info = cards[name] || (peek && peek.cards && peek.cards[name]) || {};
   const img = document.createElement("img"); img.loading = "lazy"; img.alt = name;
   img.src = `/img?name=${encodeURIComponent(name)}`;
   const ph = document.createElement("div"); ph.className = "ph"; ph.innerHTML = `<b>${esc(name)}</b>${esc(c.text || info.oracle || "")}`;
@@ -204,18 +240,35 @@ function cardEl(c, zone) {
   const tip = document.createElement("div"); tip.className = "tip";
   tip.textContent = `${name}${info.manaCost ? "  " + info.manaCost.replace(/(\w)/g, "{$1}").replace(/ /g, "") : ""}\n${info.types || ""}\n${c.text || info.oracle || ""}${c.id ? "\n[" + c.id + "]" : ""}`;
   el.appendChild(tip);
-  // link card to an option whose id is the card id (targets, attackers, hand plays…)
-  if (cur && c.id) {
+  // link card to an option whose id is the card id (targets, attackers, hand plays…); never a card of the rival's hand
+  if (cur && c.id && zone !== "peek") {
     const o = cur.options.find((o) => o.id === c.id || o.id.startsWith(c.id + "->") || o.id.startsWith(c.id + ":") || o.id === String(c.id).replace(/^c/, ""));
     if (o) { el.classList.add("opt"); el.dataset.opt = o.id; el.onclick = () => toggle(o.id); }
   }
   return el;
+}
+// Analysis mode: the rival's hand is what it held at its latest decision, not a live feed. The note says when that was,
+// and owns up when the count we are shown on the table has moved since (it played, drew or discarded without deciding again).
+function renderPeek() {
+  const z = $("peekHand"); z.innerHTML = "";
+  if (!peek) { $("peekNote").textContent = "todavía no tomó ninguna decisión en esta partida"; return; }
+  for (const c of peek.hand) z.appendChild(cardEl(c, "peek"));
+  if (!peek.hand.length) z.innerHTML = `<span class="small">sin cartas en la mano</span>`;
+  peekNote();
+}
+function peekNote() {
+  if (!peek) return;
+  const n = peek.hand.length, ph = peek.phase && peek.phase !== "null" ? ` · ${peek.phase}` : "";
+  const when = peek.turn ? `turno ${peek.turn}${ph}` : "antes del primer turno";
+  const moved = oppHandNow !== null && oppHandNow !== n ? ` · ahora tiene ${oppHandNow}: se actualiza cuando vuelva a decidir` : "";
+  $("peekNote").textContent = `${n} carta${n === 1 ? "" : "s"}, como la tenía en su última decisión (${when})${moved}`;
 }
 function renderState(st) {
   if (!st) return;
   const ph = st.phase && st.phase !== "null" ? st.phase : "—";
   $("turn").textContent = `Turno ${st.turn ?? "?"} · ${ph} · juega ${st.activePlayer === "you" ? "vos" : "el rival"}`;
   const you = st.you || {}, opp = st.opponent || {};
+  if (peek && typeof opp.handSize === "number") { oppHandNow = opp.handSize; peekNote(); }
   $("meLife").textContent = you.life ?? "?"; $("oppLife").textContent = opp.life ?? "?";
   $("oppCounts").innerHTML = `mano ${opp.handSize ?? "?"} · biblioteca ${opp.librarySize ?? "?"} · <span class="pile" data-pile="opp-gy">cementerio ${(opp.graveyard || []).length}</span><span class="pile" data-pile="opp-ex">exilio ${(opp.exile || []).length}</span>`;
   $("meCounts").innerHTML = `biblioteca ${you.librarySize ?? "?"} · <span class="pile" data-pile="me-gy">cementerio ${(you.graveyard || []).length}</span><span class="pile" data-pile="me-ex">exilio ${(you.exile || []).length}</span>`;

@@ -50,7 +50,7 @@ export interface SeatConfig {
   /** Extra JSON merged into every request body (provider-specific knobs). */
   extraBody?: Record<string, unknown>;
   /** Pilot patch: per-seat overrides of the knowledge/policy event flags (to pit an expert seat against a frozen one in the same run). */
-  eventOverrides?: Partial<Pick<EventConfig, "damageMath" | "mulliganMath" | "mulliganPolicy" | "plansFile" | "combatMath" | "openMana" | "auraPolicy" | "combatPolicy" | "sequencePolicy">>;
+  eventOverrides?: Partial<Pick<EventConfig, "damageMath" | "mulliganMath" | "mulliganPolicy" | "plansFile" | "combatMath" | "openMana" | "auraPolicy" | "combatPolicy" | "sequencePolicy" | "assignPolicy" | "manaPolicy" | "bottomPolicy">>;
   headers?: Record<string, string>;
   /** Max concurrent in-flight model calls for this seat (rate-limit guard); unset = no limit. Queue time isn't charged to the agent. */
   concurrency?: number;
@@ -136,6 +136,12 @@ export interface EventConfig {
   combatPolicy?: "advise" | "strict";
   /** Pilot patch: strict = cantrips/ramp are not offered before a key spell while casting them first would leave that spell unable to pay a live Spell Pierce-style tax (needs openMana). */
   sequencePolicy?: "advise" | "strict";
+  /** Pilot patch: strict = a trampling attacker's damage split is answered by the harness: lethal to each blocker, the rest to the player. */
+  assignPolicy?: "advise" | "strict";
+  /** Pilot patch: "Mana colours" section (colours the list needs vs the ones the battlefield makes). strict = also answers the colour of a mana Aura and the basic of a land search when one needed colour has no source and no way from the hand. */
+  manaPolicy?: "advise" | "strict";
+  /** Pilot patch: strict = a London-mulligan bottom is not offered the lands the hand needs nor its only cheap creature. */
+  bottomPolicy?: "advise" | "strict";
   /** Pilot patch: YAML with archetype signatures and matchup plans; a "Game plan" section is rendered when the seat's deck is recognised. */
   plansFile?: string;
   /** Pilot patch: decide play/draw by policy so that odd matches put seat 0 on the play and even matches seat 1 (balanced bars). */
@@ -261,6 +267,9 @@ export function validateConfig(cfg: BenchConfig) {
   if (cfg.event.combatPolicy === "strict" && !cfg.event.combatMath) errs.push("event.combatPolicy strict needs event.combatMath: true");
   if (cfg.event.sequencePolicy !== undefined && !["advise", "strict"].includes(cfg.event.sequencePolicy)) errs.push("event.sequencePolicy must be advise or strict");
   if (cfg.event.sequencePolicy === "strict" && !cfg.event.openMana) errs.push("event.sequencePolicy strict needs event.openMana: true");
+  if (cfg.event.assignPolicy !== undefined && !["advise", "strict"].includes(cfg.event.assignPolicy)) errs.push("event.assignPolicy must be advise or strict");
+  if (cfg.event.manaPolicy !== undefined && !["advise", "strict"].includes(cfg.event.manaPolicy)) errs.push("event.manaPolicy must be advise or strict");
+  if (cfg.event.bottomPolicy !== undefined && !["advise", "strict"].includes(cfg.event.bottomPolicy)) errs.push("event.bottomPolicy must be advise or strict");
   if (cfg.event.playDrawAlternate !== undefined && typeof cfg.event.playDrawAlternate !== "boolean") errs.push("event.playDrawAlternate must be true or false");
   if (cfg.event.plansFile !== undefined && (typeof cfg.event.plansFile !== "string" || !fs.existsSync(cfg.event.plansFile))) errs.push("event.plansFile must point to an existing YAML file");
   const w = cfg.event.providerRetryWindowSec;

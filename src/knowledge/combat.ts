@@ -201,3 +201,24 @@ export function lethalBlocks(req: DecisionRequest, db: CardDb): { ids: string[];
   if (!ids.length || remaining >= life) return undefined;
   return { ids, why: `${incoming} incoming vs ${life} life: ${why.join(", ")} (${remaining} gets through)` };
 }
+
+/**
+ * Pilot patch (assignPolicy strict): the damage split of a trampling attacker. Forge lists every legal split; the one
+ * that puts the most on the defending player is exactly lethal to each blocker, so nothing is lost by taking it (the
+ * model put 8 on a 1/1 chump blocker and 1 on a player at 8 life). Undefined unless every option names the player's
+ * share and one option has strictly the most.
+ */
+export function trampleAssignment(req: DecisionRequest): { id: string; label: string; why: string } | undefined {
+  if (req.phase !== "game" || req.kind !== "assign_damage" || req.options.length < 2 || req.min > 1 || req.max < 1) return undefined;
+  let best: { id: string; label: string; dmg: number } | undefined;
+  let tie = false;
+  for (const o of req.options) {
+    const m = o.label.match(/, defending P\d+: (\d+)$/);
+    if (!m) return undefined;
+    const dmg = Number(m[1]);
+    if (!best || dmg > best.dmg) { best = { id: o.id, label: o.label, dmg }; tie = false; }
+    else if (dmg === best.dmg) tie = true;
+  }
+  if (!best || tie || best.dmg <= 0) return undefined;
+  return { id: best.id, label: best.label, why: `lethal to each blocker, the rest (${best.dmg}) to the player: ${best.label}` };
+}

@@ -2,11 +2,16 @@ package forge.bridge;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import forge.ai.ComputerUtilCost;
 import forge.ai.ComputerUtilMana;
+import forge.card.MagicColor;
 import forge.card.mana.ManaAtom;
 import forge.card.mana.ManaCostShard;
+import forge.game.ability.AbilityKey;
+import forge.game.ability.AbilityUtils;
+import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CardLists;
 import forge.game.card.CardPredicates;
@@ -19,6 +24,8 @@ import forge.game.mana.ManaCostBeingPaid;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.TargetRestrictions;
+import forge.game.trigger.Trigger;
+import forge.game.trigger.TriggerType;
 import forge.game.zone.ZoneType;
 
 /**
@@ -94,8 +101,9 @@ final class Playability {
 
     /**
      * Mana the seat could make for `paidFor` right now: floating mana, plus each untapped source's best mana ability
-     * without a mana cost of its own (its amount, any of the types its abilities make). Optimistic for sources that
-     * make several mana of one chosen colour; filter lands (abilities with a mana cost) are left out.
+     * without a mana cost of its own (its amount, any of the types its abilities make), plus the mana a "tapped for
+     * mana" trigger adds to it (`tapBonus`). Optimistic for sources that make several mana of one chosen colour; filter
+     * lands (abilities with a mana cost) are left out.
      */
     private static List<Unit> units(SpellAbility paidFor, Player p) {
         List<Unit> out = new ArrayList<>();
@@ -106,12 +114,16 @@ final class Playability {
         for (Card c : cards) {
             if (spent.contains(c)) continue;
             int amount = 0, types = 0;
+            List<Integer> bonus = List.of();
             for (SpellAbility ma : c.getManaAbilities()) {
                 try {
                     ma.setActivatingPlayer(p);
                     Cost mc = ma.getPayCosts();
                     if (mc != null && mc.hasManaCost()) continue;
                     if (!ma.canPlay() || (mc != null && !CostPayment.canPayAdditionalCosts(mc, ma, false))) continue;
+                    // The trigger's mana comes whatever the ability itself makes (a Forest tapped for a {W} spell).
+                    List<Integer> extra = tapBonus(c, ma, p);
+                    if (extra.size() > bonus.size()) bonus = extra;
                     int t = 0;
                     for (byte atom : ManaAtom.MANATYPES) if (paidFor == null || ma.isManaAbilityFor(paidFor, atom)) t |= atom;
                     int n = paidFor != null ? ma.totalAmountOfManaGenerated(paidFor, true) : ma.amountOfManaGenerated(true);
@@ -123,14 +135,70 @@ final class Playability {
                 }
             }
             for (int i = 0; i < amount; i++) out.add(new Unit(types));
+            for (int t : bonus) out.add(new Unit(t));
         }
         return out;
     }
 
     /**
+     * The mana a "tapped for mana" trigger would add for `p` when `c`'s mana ability `ma` is activated (Utopia Sprawl,
+     * Fertile Ground, Wild Growth on the land): one entry per mana, the mana types it may be (ManaAtom bits). Forge's
+     * own probes of a source (isManaAbilityFor, totalAmountOfManaGenerated) don't see it; its AI payer does, and this
+     * reads the triggers the same way (ComputerUtilMana.predictManafromSpellAbility). Nothing is run or asked; a
+     * trigger that can't be read out of context adds nothing.
+     */
+    static List<Integer> tapBonus(Card c, SpellAbility ma, Player p) {
+        List<Integer> out = new ArrayList<>();
+        try {
+            Map<AbilityKey, Object> params = AbilityKey.mapFromCard(c);
+            params.put(AbilityKey.Activator, p);
+            params.put(AbilityKey.AbilityMana, ma);
+            params.put(AbilityKey.Produced, ma.getManaPart() != null && ma.getManaPart().getOrigProduced() != null ? ma.getManaPart().getOrigProduced() : "");
+            for (Trigger tr : p.getGame().getTriggerHandler().getActiveTrigger(TriggerType.TapsForMana, params)) {
+                SpellAbility sa = tr.ensureAbility();
+                if (sa == null || sa.getApi() != ApiType.Mana) continue;
+                Card host = sa.getHostCard();
+                // Only mana that goes to this player: the tapped permanent's controller / the activator, or "you".
+                String to = sa.getParamOrDefault("Defined", "You");
+                boolean mine = to.equals("You") ? host != null && host.getController() == p
+                        : to.equals("TriggeredCardController") ? c.getController() == p
+                        : to.equals("TriggeredActivator") || to.equals("TriggeredPlayer");
+                if (!mine) continue;
+                int amount = AbilityUtils.calculateAmount(host, sa.getParamOrDefault("Amount", "1"), sa);
+                String produced = sa.getParam("Produced");
+                if (produced == null || amount <= 0) continue;
+                List<Integer> each = new ArrayList<>(); // one activation's worth
+                if (produced.startsWith("Combo")) {
+                    // "Combo W U", "Combo Any": each mana is any one of the listed colours
+                    int mask = 0;
+                    for (String tok : produced.substring("Combo".length()).trim().split("\\s+")) mask |= manaTypes(tok, host);
+                    if (mask != 0) each.add(mask);
+                } else {
+                    for (String tok : produced.trim().split("\\s+")) {
+                        int t = manaTypes(tok, host);
+                        if (t != 0) each.add(t);
+                    }
+                }
+                for (int i = 0; i < amount; i++) out.addAll(each);
+            }
+        } catch (RuntimeException e) {
+            return new ArrayList<>(); // can't be read out of context: no bonus
+        }
+        return out;
+    }
+
+    /** A token of a mana effect's Produced as ManaAtom bits: a colour letter, "Any", or "Chosen" (the host's chosen colour); 0 if unknown. */
+    private static int manaTypes(String tok, Card host) {
+        if (tok.equals("Any")) return ManaAtom.ALL_MANA_COLORS;
+        if (tok.equals("Chosen")) return host != null && host.hasChosenColor() ? MagicColor.fromName(host.getChosenColor()) & ManaAtom.ALL_MANA_COLORS : 0;
+        return tok.length() == 1 ? ManaAtom.fromName(tok) & (ManaAtom.ALL_MANA_COLORS | ManaAtom.COLORLESS) : 0;
+    }
+
+    /**
      * Whether some mana ability of this source (mana-costed ones included) can make a type of mana the payment still
-     * needs: any type while generic mana is owed, else one of the coloured / colourless shards' types. Forge's payment
-     * input marks every source with a playable mana ability, even a Forest when only {B} is owed.
+     * needs: any type while generic mana is owed, else one of the coloured / colourless shards' types, counting the
+     * mana a "tapped for mana" trigger adds (a Forest under a white Utopia Sprawl helps pay {W}). Forge's payment input
+     * marks every source with a playable mana ability, even a Forest when only {B} is owed.
      */
     static boolean helpsPay(Card c, ManaCostBeingPaid owing, SpellAbility paidFor, Player p) {
         int needed = 0;
@@ -146,6 +214,7 @@ final class Playability {
             try {
                 ma.setActivatingPlayer(p);
                 for (byte atom : ManaAtom.MANATYPES) if ((needed & atom) != 0 && ma.isManaAbilityFor(paidFor, atom)) return true;
+                for (int t : tapBonus(c, ma, p)) if ((needed & t) != 0) return true;
             } catch (RuntimeException e) {
                 return true; // can't probe it: offer it
             }
@@ -193,13 +262,17 @@ final class Playability {
         return units(paidFor, p).size();
     }
 
-    /** Mana each source could make for this payment (the most of any one of its mana abilities), by card id. */
+    /**
+     * Mana each source could make for this payment (the most of any one of its mana abilities, with what a "tapped for
+     * mana" trigger adds to it), by card id.
+     */
     static int manaFrom(Card c, SpellAbility paidFor, Player p) {
         int amount = 0;
         for (SpellAbility ma : c.getManaAbilities()) {
             try {
                 ma.setActivatingPlayer(p);
-                amount = Math.max(amount, paidFor != null ? ma.totalAmountOfManaGenerated(paidFor, true) : ma.amountOfManaGenerated(true));
+                int own = paidFor != null ? ma.totalAmountOfManaGenerated(paidFor, true) : ma.amountOfManaGenerated(true);
+                amount = Math.max(amount, Math.max(0, own) + tapBonus(c, ma, p).size());
             } catch (RuntimeException e) {
                 // left out
             }

@@ -1,8 +1,9 @@
 /**
  * Pilot patch (mtg-rival): a web seat for a human player. The harness asks this server for each decision; the server
  * pushes it to the browser over SSE and resolves with the ids the player chose. One server per process (one human
- * seat per run). No dependencies: node:http, SSE for pushes, fetch POST for answers, Scryfall images proxied and cached
- * on disk so the page works offline after the first game.
+ * seat per run). No dependencies: node:http, SSE for pushes (/poll, a long poll with the same events, for clients
+ * behind a proxy that holds streams back), fetch POST for answers, Scryfall images proxied and cached on disk so the
+ * page works offline after the first game.
  */
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -13,12 +14,18 @@ import { type CardDb, getCard } from "../cards/db.ts";
 import type { DecisionRequest } from "../types.ts";
 import { info } from "../util/log.ts";
 
-export interface HumanServerOpts { port: number; token?: string; cacheDir: string; db: CardDb; seatId: string; label?: string }
+export interface HumanServerOpts { port: number; token?: string; cacheDir: string; db: CardDb; seatId: string; label?: string;
+  /** Analysis mode: the player is also shown the other seat's hand, as that seat saw it at its latest decision. */
+  peek?: boolean }
 
 interface Pending { rid: string; req: DecisionRequest; resolve: (choice: string[] | null) => void; ctx: Record<string, unknown>; timer?: NodeJS.Timeout }
 
+type CardInfo = Record<string, { manaCost: string; types: string; oracle: string; pt?: string }>;
+
 /** Game events the engine reports (forge.ts calls these hooks when a human seat is in the match). */
-export const humanHooks: { gameStart?: (info: Record<string, unknown>) => void; gameEnd?: (info: Record<string, unknown>) => void; matchEnd?: (info: Record<string, unknown>) => void } = {};
+export const humanHooks: { gameStart?: (info: Record<string, unknown>) => void; gameEnd?: (info: Record<string, unknown>) => void; matchEnd?: (info: Record<string, unknown>) => void;
+  /** The state the other seat was just asked to decide on (its own view, so its hand is in it). Set in analysis mode only. */
+  opponentView?: (info: { state: any }) => void } = {};
 
 const UI_FILE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "ui.html");
 
@@ -29,13 +36,25 @@ export class HumanWebServer {
   private pending: Pending | null = null;
   private lastEvent: { type: string; data: unknown } | null = null;
   private history: { type: string; data: unknown }[] = [];
+  /** The last events, numbered, for /poll clients; and the polls waiting for the next one. */
+  private seq = 0;
+  private recent: { seq: number; type: string; data: unknown }[] = [];
+  private waiters = new Set<() => void>();
+  /** When a /poll request last came in, and the newest seq a /poll answer has carried (stop() lets the tail be collected). */
+  private lastPollAt = 0;
+  private polledSeq = 0;
   private imgQueue: Promise<void> = Promise.resolve();
+  /** Analysis mode (opts.peek): the other seat's hand at its latest decision this game, and what it was built from (repeats are skipped). */
+  private peekData: { hand: unknown[]; turn?: number; phase?: string; cards: CardInfo } | null = null;
+  private peekKey = "";
 
   constructor(private opts: HumanServerOpts) {
     this.token = opts.token || crypto.randomBytes(12).toString("base64url");
-    humanHooks.gameStart = (i) => this.broadcast("game", { event: "start", ...i });
+    humanHooks.gameStart = (i) => { this.peekData = null; this.peekKey = ""; this.broadcast("game", { event: "start", ...i }); };
     humanHooks.gameEnd = (i) => this.broadcast("game", { event: "end", ...i });
     humanHooks.matchEnd = (i) => this.broadcast("over", i);
+    // Off unless the run asked for it: without the hook the other seat's states never reach this server.
+    humanHooks.opponentView = opts.peek ? (i) => this.peek(i.state) : undefined;
   }
 
   get url() { return `http://localhost:${this.opts.port}/?t=${this.token}`; }
@@ -46,11 +65,17 @@ export class HumanWebServer {
     this.server = http.createServer((req, res) => this.handle(req, res).catch((e) => { res.statusCode = 500; res.end(String(e)); }));
     await new Promise<void>((resolve, reject) => { this.server!.once("error", reject); this.server!.listen(this.opts.port, resolve); });
     info(`human seat "${this.opts.seatId}": open ${this.url}`);
+    if (this.opts.peek) info(`human seat "${this.opts.seatId}": analysis mode, this player is shown the other seat's hand`);
   }
 
   async stop(): Promise<void> {
+    // The result of the match is the last thing said, and a polling client is between two requests most of the time
+    // (a stream client already has it): give it a few seconds to come back for the tail before the server goes away.
+    const giveUp = Date.now() + 8000;
+    while (this.polledSeq < this.seq && this.lastPollAt > Date.now() - 40000 && Date.now() < giveUp) await new Promise((r) => setTimeout(r, 100));
     for (const c of this.clients) c.end();
     this.clients.clear();
+    for (const w of [...this.waiters]) w();
     await new Promise<void>((r) => this.server ? this.server.close(() => r()) : r());
     this.server = undefined;
   }
@@ -71,25 +96,59 @@ export class HumanWebServer {
     });
   }
 
-  private decisionPayload(p: Pending) {
-    const { req } = p;
-    const cards: Record<string, { manaCost: string; types: string; oracle: string; pt?: string }> = {};
+  /** Oracle data of every card named in these values (a state, option cards, a hand), for the page's tooltips and text boxes. */
+  private cardInfo(...roots: unknown[]): CardInfo {
+    const cards: CardInfo = {};
     const visit = (v: unknown) => {
       if (typeof v === "string") { const c = getCard(this.opts.db, v); if (c && !cards[c.name]) cards[c.name] = { manaCost: c.manaCost, types: c.types, oracle: c.oracle, pt: (c as any).pt }; return; }
       if (Array.isArray(v)) { for (const x of v) visit(x); return; }
       if (v && typeof v === "object") for (const [k, x] of Object.entries(v as Record<string, unknown>)) { if (k === "name" || k === "card" || k === "source" || k === "graveyard" || k === "exile" || k === "hand" || k === "cards") visit(x); else if (typeof x === "object") visit(x); }
     };
-    visit(req.state);
-    for (const o of req.options) if (o.card) visit(o.card);
+    for (const r of roots) visit(r);
+    return cards;
+  }
+
+  private decisionPayload(p: Pending) {
+    const { req } = p;
+    const cards = this.cardInfo(req.state, req.options.map((o) => o.card));
     return { rid: p.rid, kind: req.kind, prompt: req.prompt, state: req.state, options: req.options.map((o) => ({ id: o.id, label: o.label, card: o.card, type: o.meta?.type })),
       min: req.min, max: req.max, cards, ...p.ctx };
   }
 
+  /**
+   * Analysis mode: the other seat was just asked to decide, and this is the hand it is looking at. Only the hand goes to
+   * the page (the rest of that state is on the table already), as a copy: nothing here touches what that seat is given.
+   */
+  private peek(state: any) {
+    try {
+      if (!Array.isArray(state?.you?.hand)) return;
+      const hand = JSON.stringify(state.you.hand), key = `${state.turn}|${state.phase}|${hand}`;
+      if (key === this.peekKey) return; // several decisions in a row on the same hand
+      this.peekKey = key;
+      this.peekData = { hand: JSON.parse(hand), turn: state.turn, phase: state.phase, cards: this.cardInfo(state.you.hand) };
+      this.broadcast("peek", this.peekData);
+    } catch (e: any) {
+      info(`human seat "${this.opts.seatId}": analysis view skipped (${e?.message ?? e})`); // a side view never breaks a decision
+    }
+  }
+
   private broadcast(type: string, data: unknown) {
-    this.lastEvent = { type, data };
+    if (type !== "peek") this.lastEvent = { type, data }; // a peek is a side note: it never says where the table stands
     if (type === "game" || type === "over") this.history.push({ type, data });
+    this.recent.push({ seq: ++this.seq, type, data });
+    if (this.recent.length > 100) this.recent.shift();
     const msg = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
     for (const c of this.clients) c.write(msg);
+    for (const w of [...this.waiters]) w();
+  }
+
+  /** Where things stand for a client that just connected: who it is, the games so far, and the open decision if any. */
+  private snapshot(): { type: string; data: unknown }[] {
+    const out: { type: string; data: unknown }[] = [{ type: "hello", data: { seatId: this.opts.seatId, label: this.opts.label ?? "Humano", ...(this.opts.peek ? { peek: true } : {}) } }, ...this.history];
+    if (this.peekData) out.push({ type: "peek", data: this.peekData }); // after the history: a game start clears the page's peek
+    if (this.pending) out.push({ type: "decision", data: this.decisionPayload(this.pending) });
+    else if (this.lastEvent?.type !== "over") out.push({ type: "waiting", data: {} }); // "over" is already in the history
+    return out;
   }
 
   private async handle(req: http.IncomingMessage, res: http.ServerResponse) {
@@ -109,14 +168,27 @@ export class HumanWebServer {
     }
     if (url.pathname === "/events") {
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", "x-accel-buffering": "no" });
-      res.write(`event: hello\ndata: ${JSON.stringify({ seatId: this.opts.seatId, label: this.opts.label ?? "Humano" })}\n\n`);
-      for (const h of this.history) res.write(`event: ${h.type}\ndata: ${JSON.stringify(h.data)}\n\n`);
-      if (this.pending) res.write(`event: decision\ndata: ${JSON.stringify(this.decisionPayload(this.pending))}\n\n`);
-      else if (this.lastEvent?.type === "over") { /* already sent via history */ }
-      else res.write(`event: waiting\ndata: {}\n\n`);
+      for (const e of this.snapshot()) res.write(`event: ${e.type}\ndata: ${JSON.stringify(e.data)}\n\n`);
       this.clients.add(res);
       const ping = setInterval(() => { try { res.write(": ping\n\n"); } catch { /* closed */ } }, 20000);
       req.on("close", () => { clearInterval(ping); this.clients.delete(res); });
+      return;
+    }
+    if (url.pathname === "/poll") {
+      // The events of /events as a long poll, for clients behind a proxy that holds a stream back until it ends (a
+      // Cloudflare quick tunnel does): ?since=<seq of the last answer> → { seq, events } as soon as there is one, or
+      // an empty list after 25 s. Without since (or too far behind to catch up): where things stand now.
+      const since = Number(url.searchParams.get("since") ?? "-1");
+      this.lastPollAt = Date.now();
+      const send = (events: { type: string; data: unknown }[]) => { this.polledSeq = this.seq; res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify({ seq: this.seq, events })); };
+      const oldest = this.recent.length ? this.recent[0].seq : this.seq + 1;
+      if (!(since >= 0) || since > this.seq || since < oldest - 1) { send(this.snapshot()); return; }
+      const fresh = () => this.recent.filter((e) => e.seq > since).map(({ type, data }) => ({ type, data }));
+      if (since < this.seq) { send(fresh()); return; }
+      const wake = () => { clearTimeout(timer); this.waiters.delete(wake); if (!res.writableEnded) send(fresh()); };
+      const timer = setTimeout(wake, 25000);
+      this.waiters.add(wake);
+      req.on("close", () => { clearTimeout(timer); this.waiters.delete(wake); });
       return;
     }
     if (url.pathname === "/answer" && req.method === "POST") {

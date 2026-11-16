@@ -13,9 +13,13 @@ import com.google.gson.JsonObject;
 
 import forge.ai.AiAttackController;
 import forge.ai.AiBlockController;
+import forge.card.mana.ManaAtom;
+import forge.card.mana.ManaCostShard;
 import forge.game.Game;
 import forge.game.keyword.Keyword;
+import forge.game.mana.Mana;
 import forge.game.mana.ManaCostBeingPaid;
+import forge.game.mana.ManaPool;
 import forge.game.spellability.SpellAbility;
 import forge.game.card.Card;
 import forge.game.card.CardView;
@@ -171,6 +175,12 @@ final class InputDriver implements Observer, Runnable {
     private int autoIgnored = 0;
     /** Every source of the current payment was tapped without asking (they were all needed). */
     private boolean tappedAll = false;
+    /**
+     * What the current payment still owed when floating mana was last used on it (null: not since), and whether a use
+     * changed nothing: the pool is then left alone for the rest of this payment.
+     */
+    private String poolTried = null;
+    private boolean poolFailed = false;
 
     private void drive(Input in) throws Exception {
         trace("drive " + in.getClass().getSimpleName());
@@ -189,6 +199,8 @@ final class InputDriver implements Observer, Runnable {
         autoStarted = false;
         autoIgnored = 0;
         tappedAll = false;
+        poolTried = null;
+        poolFailed = false;
         // The game thread posts the input's first message to the event thread after announcing the input, so the
         // flushes in awaitMessage can run before it is even posted; until it has run, the prompt and buttons are the
         // previous input's (and InputAttack has no defender yet). Wait for this input's own message, briefly.
@@ -654,6 +666,14 @@ final class InputDriver implements Observer, Runnable {
                 }
             }
             owedAtAuto = null;
+            // Floating mana used on this payment last step and nothing changed: Forge wouldn't take it. No more pool here.
+            if (poolTried != null) {
+                if (poolTried.equals(owed) && !poolFailed) {
+                    poolFailed = true;
+                    trace("payment: floating mana changed nothing (owed " + owed + "); leaving the pool alone for this payment");
+                }
+                poolTried = null;
+            }
             // Forge enables Auto from a plan it makes once per payment and keeps while plain sources are tapped, so the
             // button stays enabled after the sources it planned are gone (tapped for another part of the cost). Plan again
             // now: no plan means the cost can't be paid any more, whatever the button says.
@@ -671,6 +691,29 @@ final class InputDriver implements Observer, Runnable {
             int fewest = fewestSources(outputs, need);
             trace("payment: need=" + need + " sources=" + sources.stream().map(o -> o.id + ":" + o.card).toList() + " outputs=" + outputs
                     + " plan=" + plan + " coverable=" + coverable + " pool=" + ch.player.getManaPool().totalMana() + " autoFailed=" + autoFailed);
+            // Mana floating in the pool isn't applied by tapping a source: Forge pays a tapped source's own mana only, so
+            // what a "tapped for mana" trigger added (Utopia Sprawl's colour on a Forest) stays in the pool while the cost
+            // is still owed. Spend it as a click on the pool would (PlayerControllerHuman.useMana), one mana per step:
+            // (a) it pays a coloured shard still owed; (b) the sources offered can't cover what is owed without it;
+            // (c) sources were already tapped for this payment and it pays what is left. Otherwise (generic mana owed,
+            // nothing tapped yet, sources enough) the pool is left alone: which sources to tap is the agent's choice.
+            if (coverable && !poolFailed && owing != null) {
+                int makeable = 0;
+                for (int n : outputs) makeable += n;
+                String rule = null;
+                byte colour = poolMana(owing, paidFor, true);
+                if (colour != 0) rule = "a: it pays a coloured shard still owed";
+                else if ((colour = poolMana(owing, paidFor, false)) != 0) {
+                    if (makeable < need) rule = "b: the sources offered make " + makeable + " of the " + need + " owed";
+                    else if (batches > 0 || tappedAll) rule = "c: sources were already tapped for this payment";
+                }
+                if (rule != null) {
+                    poolTried = owed;
+                    trace("payment: pool rule " + rule + "; using floating " + forge.card.MagicColor.toShortString(colour) + " (owed " + owed + ")");
+                    ctl.useMana(colour);
+                    return true;
+                }
+            }
             // Unpayable: cancel (the cast rolls back), and say why with the next question. Every legal payment taps the
             // same kind of source: let Auto pay (unless manaPayment: always). Otherwise, or once Auto has failed on this
             // payment, the agent picks the sources.
@@ -964,6 +1007,39 @@ final class InputDriver implements Observer, Runnable {
             return f.get(in) + "|" + ch.player.getManaPool().totalMana();
         } catch (ReflectiveOperationException | RuntimeException e) {
             return "?";
+        }
+    }
+
+    /**
+     * The colour (ManaAtom byte; 32 = colourless) of a mana floating in the seat's pool that can pay part of what is
+     * owed, or 0. `coloured`: only one that pays a shard naming a colour (or colourless) that is still owed, never
+     * generic mana. Otherwise any part of the cost, colourless mana first, then the colour with most floating mana.
+     */
+    private byte poolMana(ManaCostBeingPaid owing, SpellAbility paidFor, boolean coloured) {
+        try {
+            ManaPool pool = ch.player.getManaPool();
+            if (pool.isEmpty()) return 0;
+            byte best = 0;
+            int bestAmount = 0;
+            for (Mana m : pool) {
+                byte colour = m.getColor();
+                if (colour == 0 || (paidFor != null && !m.meetsManaRestrictions(paidFor))) continue;
+                if (coloured) {
+                    for (ManaCostShard s : owing.getDistinctShards()) {
+                        if (owing.getUnpaidShards(s) <= 0 || s.isGeneric() || s.isPhyrexian()) continue;
+                        int types = s.getShard() & (ManaAtom.ALL_MANA_COLORS | ManaAtom.COLORLESS);
+                        if (types == 0 || (s.isOr2Generic() && (types & colour) == 0)) continue;
+                        if (pool.canPayForShardWithColor(s, colour)) return colour;
+                    }
+                    continue;
+                }
+                if (!owing.isAnyPartPayableWith(colour, pool)) continue;
+                int amount = colour == ManaAtom.COLORLESS ? Integer.MAX_VALUE : pool.getAmountOfColor(colour);
+                if (amount > bestAmount) { best = colour; bestAmount = amount; }
+            }
+            return best;
+        } catch (RuntimeException e) {
+            return 0; // can't read the pool or the cost: leave the pool alone
         }
     }
 
