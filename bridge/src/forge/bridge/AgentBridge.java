@@ -58,6 +58,7 @@ public final class AgentBridge {
             MatchContext ctx = new MatchContext(Integer.parseInt(a.getOrDefault("max-turns", "40")), !"all".equals(a.get("stops")), "always".equals(a.get("mana")),
                     Integer.parseInt(a.getOrDefault("max-retries", "3")));
             ctx.firstSeat = Integer.parseInt(a.getOrDefault("first", "-1")); // pilot patch: --first 0|1 forces the starting player
+            for (String s : a.getOrDefault("lenient", "").split(",")) if (s.equals("0") || s.equals("1")) ctx.lenient[Integer.parseInt(s)] = true; // pilot patch: --lenient 1
 
             GameRules rules = new GameRules(GameType.Draft);
             rules.setAppliedVariants(EnumSet.of(GameType.Draft));

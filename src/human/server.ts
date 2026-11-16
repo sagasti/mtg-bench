@@ -111,7 +111,7 @@ export class HumanWebServer {
   private decisionPayload(p: Pending) {
     const { req } = p;
     const cards = this.cardInfo(req.state, req.options.map((o) => o.card));
-    return { rid: p.rid, kind: req.kind, prompt: req.prompt, state: req.state, options: req.options.map((o) => ({ id: o.id, label: o.label, card: o.card, type: o.meta?.type })),
+    return { rid: p.rid, kind: req.kind, prompt: req.prompt, state: req.state, options: req.options.map((o) => ({ id: o.id, label: o.label, card: o.card, type: o.meta?.type, doubt: o.meta?.doubtful })),
       min: req.min, max: req.max, cards, ...p.ctx };
   }
 

@@ -5,6 +5,12 @@ public final class MatchContext {
     public volatile int game = 0;
     /** Pilot patch (mtg-rival): seat forced to play first in every game of this match (-1 = Forge's die roll + the winner's choice). */
     public volatile int firstSeat = -1;
+    /**
+     * Pilot patch: seats (a person at the web table) that are still offered the cards the affordability / target probe
+     * rules out, marked "doubtful", and are asked at a stop even when every card is doubtful. The probe is an estimate;
+     * the report counts the stops and what the person did with them.
+     */
+    public final boolean[] lenient = new boolean[2];
     /** Games won so far in this match, by seat (free information: the match score). */
     public final int[] wins = new int[2];
     /**

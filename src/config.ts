@@ -45,6 +45,8 @@ export interface SeatConfig {
   /** Pilot patch, provider "human": port of the web table (default 8787) and the link token (random per run when unset). */
   webPort?: number;
   webToken?: string;
+  /** Human seat: also offer the cards the bridge's affordability / target probe rules out (marked doubtful), and stop for them. */
+  lenient?: boolean;
   /** Pilot patch, provider "human": seconds an external bot/person gets per decision; unanswered = forfeit (null action). Unset = wait forever. */
   decisionTimeoutSec?: number;
   /** Extra JSON merged into every request body (provider-specific knobs). */

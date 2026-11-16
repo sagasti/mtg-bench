@@ -53,6 +53,9 @@
   button:hover { border-color:var(--acc); }
   button.sel { background:#1f3a66; border-color:var(--sel); }
   button.pass { border-color:#555; color:#ccc; }
+  .dim { color:var(--dim); }
+  button.doubt { border-style:dashed; border-color:#555; color:#9aa0aa; }
+  .doubtsep { flex-basis:100%; width:100%; font-size:12px; color:var(--dim); margin-top:6px; }
   button.go { background:var(--acc); color:#000; font-weight:700; }
   button.go:disabled { opacity:.4; cursor:not-allowed; }
   .row { display:flex; gap:10px; align-items:center; margin-top:8px; flex-wrap:wrap; }
@@ -176,10 +179,18 @@ function showDecision(d) {
   $("prompt").innerHTML = `<b>${esc(kindLabel)}</b> — ${esc(d.prompt)}`;
   setStatus("TE TOCA DECIDIR", true);
   const opts = $("opts"); opts.innerHTML = "";
-  for (const o of d.options) {
+  // Doubtful options: cards the table's estimate says can't be played now (no mana, no target). The estimate is sometimes
+  // wrong, so they stay playable, listed last and marked; a stop with nothing else says so.
+  const sure = d.options.filter((o) => !o.doubt), doubt = d.options.filter((o) => o.doubt);
+  const whyEs = (w) => /target/i.test(w) ? "sin objetivo" : "sin maná";
+  if (doubt.length && !sure.some((o) => /^c\d+/.test(o.id)) && d.kind === "priority")
+    $("prompt").innerHTML = `<b>${esc(kindLabel)}</b> — Creemos que no tenés jugadas ahora. Pasá, o jugá igual una de las marcadas si nos equivocamos. <span class="dim">${esc(d.prompt)}</span>`;
+  for (const o of [...sure, ...doubt]) {
+    if (o.doubt && o === doubt[0]) { const sep = document.createElement("div"); sep.className = "doubtsep"; sep.textContent = "Creemos que estas no se pueden jugar ahora (si nos equivocamos, jugalas igual):"; opts.appendChild(sep); }
     const b = document.createElement("button");
-    b.textContent = o.label.replace(/^Button: /, ""); b.dataset.id = o.id;
+    b.textContent = o.label.replace(/^Button: /, "").replace(/ \(doubtful: [^)]*\)$/, "") + (o.doubt ? ` · ${whyEs(o.doubt)}?` : ""); b.dataset.id = o.id;
     if (o.type === "pass" || /^pass\b/i.test(o.label)) b.classList.add("pass");
+    if (o.doubt) b.classList.add("doubt");
     b.onclick = () => toggle(o.id);
     opts.appendChild(b);
   }

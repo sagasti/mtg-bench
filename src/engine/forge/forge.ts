@@ -212,6 +212,8 @@ export class ForgeEngine implements GameEngine {
           // pilot patch: balanced bars — odd rounds seat 0 plays first, even rounds seat 1 (the bridge forces it for AI and agent seats alike)
           ...(spec.playDrawAlternate ? ["--first", String(spec.round % 2 === 1 ? 0 : 1)] : []),
           "--human", String(this.cfg.controller !== "ai"),
+          // pilot patch: seats that are offered the cards the playability probe rules out (a person at the web table)
+          ...(spec.seats.some((s) => s.config.lenient) ? ["--lenient", spec.seats.map((s, i) => (s.config.lenient ? String(i) : "")).filter(Boolean).join(",")] : []),
         ];
         fs.writeSync(logFile, `$ ${this.cfg.java ?? "java"} ${args.join(" ")}\n(cwd ${cwd})\n`);
         child = spawn(this.cfg.java ?? "java", args, { cwd, stdio: ["ignore", logFile, logFile] });

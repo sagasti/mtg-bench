@@ -63,6 +63,9 @@ final class InputDriver implements Observer, Runnable {
     private final java.util.Set<String> filtered = new java.util.HashSet<>();
     private Integer lastPriorityCard = null;
     private String lastPriorityKey = "";
+    /** Lenient seats: the doubtful cards of the options being built (option id -> why), and the one last picked. */
+    private final java.util.Map<String, String> doubtful = new java.util.HashMap<>();
+    private String lastDoubt = null;
     private static final int MAX_CLICKS_PER_INPUT = 120;
     private static final boolean TRACE = "1".equals(System.getenv("MTG_BRIDGE_TRACE"));
     private void trace(String msg) { if (TRACE) System.err.println("[driver " + ch.seat + "] " + msg); }
@@ -403,6 +406,11 @@ final class InputDriver implements Observer, Runnable {
             if (filtered.size() > 1000) filtered.clear();
             if (lastPriorityCard != null && key.equals(lastPriorityKey) && withheld.add(lastPriorityCard))
                 ch.auto("policy", "priority", "card withheld: its cast just failed and the state is unchanged");
+            if (lastDoubt != null) {
+                // The person played a card the probe had ruled out: did the cast go through (state changed) or not?
+                ch.auto("policy", "priority", (key.equals(lastPriorityKey) ? "lenient: doubtful card tried, the cast failed: " : "lenient: doubtful card played: ") + lastDoubt);
+                lastDoubt = null;
+            }
             lastPriorityCard = null;
         }
         if (in instanceof InputConfirm && gui.cancelLabel.equals(loc.getMessage("lblEndTurn"))) {
@@ -448,6 +456,8 @@ final class InputDriver implements Observer, Runnable {
                 }
             }
         }
+        boolean lenient = ch.seat >= 0 && ch.seat < ch.ctx.lenient.length && ch.ctx.lenient[ch.seat];
+        doubtful.clear();
         for (Card c : cards) {
             String act;
             try { act = listChoices != null || in instanceof InputLondonMulligan ? "select card" : in.getActivateAction(c); } catch (RuntimeException e) { act = null; }
@@ -457,15 +467,21 @@ final class InputDriver implements Observer, Runnable {
                 // Offered by the human UI even when unaffordable or without a legal target; counted once per card, turn
                 // and reason, so the filter's reach (and any false negatives) is visible in the report.
                 if (filtered.add(game.getPhaseHandler().getTurn() + ":" + c.getId() + ":" + why)) ch.auto("policy", "priority", why);
-                continue;
+                if (!lenient || onlyManaAbilities(c)) continue; // tapping a land for mana is not a play worth a stop
             }
             if (in instanceof InputPassPriority && withheld.contains(c.getId())) continue;
             String who = c.getController().equals(ch.player) ? "your " : "opponent's ";
             String zone = c.getZone() != null && c.getZone().getZoneType() != ZoneType.Battlefield ? " [" + c.getZone().getZoneType() + "]" : "";
             // A face-down card the seat may not look at (a morph, a card exiled face down) is named as such.
             String name = c.isFaceDown() && !c.getView().canFaceDownBeShownTo(ch.player.getView()) ? "face-down card" : c.getName();
+            JsonObject tags = botTags(in, c);
+            if (why != null) {
+                if (tags == null) tags = new JsonObject();
+                tags.addProperty("doubtful", why);
+                doubtful.put(StateView.id(c), why);
+            }
             opts.add(new PlayerControllerExternal.Opt(StateView.id(c), act + ": " + who + name + (c.isCreature() ? " " + c.getNetPower() + "/" + c.getNetToughness() : "")
-                    + (c.isTapped() ? " (tapped)" : "") + zone, name, botTags(in, c)));
+                    + (c.isTapped() ? " (tapped)" : "") + zone + (why != null ? " (doubtful: " + why + ")" : ""), name, tags));
         }
         if (in instanceof InputSelectTargets || in instanceof InputSelectEntitiesFromList || in instanceof InputAttack) {
             for (Player p : game.getPlayers()) if (!(in instanceof InputAttack && p.equals(ch.player)) && (listChoices != null ? listChoices.contains(p) : playerSelectable(in, p))) {
@@ -504,6 +520,10 @@ final class InputDriver implements Observer, Runnable {
                 click("ok", game);
                 return true;
             }
+            // A lenient seat is asked anyway when every card on offer is doubtful: counted, to compare with what it then plays.
+            boolean anySure = false;
+            for (PlayerControllerExternal.Opt o : opts) if (o.id.matches("c\\d+") && !doubtful.containsKey(o.id)) anySure = true;
+            if (!anySure) ch.auto("policy", "priority", "lenient: asked with only doubtful cards on offer");
         }
 
         String err = gui.lastError;
@@ -832,7 +852,7 @@ final class InputDriver implements Observer, Runnable {
             choice = nullButton;
         }
         final String pick = choice;
-        if (in instanceof InputPassPriority && pick.matches("c\\d+")) { lastPriorityCard = Integer.parseInt(pick.substring(1)); lastPriorityKey = stateKey(game); }
+        if (in instanceof InputPassPriority && pick.matches("c\\d+")) { lastPriorityCard = Integer.parseInt(pick.substring(1)); lastPriorityKey = stateKey(game); lastDoubt = doubtful.get(pick); }
         click(pick, game);
         return true;
     }
@@ -931,6 +951,14 @@ final class InputDriver implements Observer, Runnable {
      * Null when something on this card can be done right now (a land drop, or a non-mana ability that is playable,
      * whose required targets all have a legal candidate, and that is affordable); else why not (NOT_AFFORDABLE / NO_TARGET).
      */
+    /** A permanent whose only abilities here make mana (a land, a mana rock): never a "doubtful" play. */
+    private boolean onlyManaAbilities(Card c) {
+        try {
+            for (SpellAbility sa : c.getAllPossibleAbilities(ch.player, true)) if (!sa.isManaAbility()) return false;
+            return true;
+        } catch (RuntimeException e) { return false; }
+    }
+
     private String whyNotPlayable(Card c) {
         // Forge's affordability probe asks the player's controller to choose permanents for convoke/improvise/delve;
         // with the human controller that opens a real input. For those spells, estimate instead (helpedAffordable).
